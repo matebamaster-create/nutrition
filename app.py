@@ -65,9 +65,13 @@ with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80) # アイコン画像（お好みで変更可）
     st.title("⚙️ システム設定")
     
-    st.markdown("### 🔑 AI連携設定")
-    api_key = st.text_input("Gemini APIキー", type="password", placeholder="AI Studioで取得したキー")
-    st.caption("※必須：AIによる定性チェックに利用します")
+st.markdown("### 🔑 AI連携設定")
+    try:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("🟢 AIシステム接続済み")
+    except Exception:
+        api_key = None
+        st.error("⚠️ APIキーが設定されていません")
     
     st.markdown("---")
     st.markdown("### 📏 定量チェック基準")
@@ -121,10 +125,10 @@ with tab_main:
         if not api_key:
             st.warning("👈 左のサイドバーにGemini APIキーを入力してください！")
         else:
-            if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
+                if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
                 # AI設定
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-pro')
                 
                 with st.spinner('データを解析し、AIが献立をレビューしています...（約30秒〜1分）'):
                     try:
