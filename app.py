@@ -14,7 +14,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# カスタムCSS（少しだけデザインを整える）
+# カスタムCSS
 st.markdown("""
     <style>
     .main { background-color: #FAFAFA; }
@@ -62,10 +62,10 @@ def save_ai_rules(rules_text):
 # サイドバー（設定画面）
 # ==========================================
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80) # アイコン画像（お好みで変更可）
+    st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80)
     st.title("⚙️ システム設定")
     
-st.markdown("### 🔑 AI連携設定")
+    st.markdown("### 🔑 AI連携設定")
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
         st.success("🟢 AIシステム接続済み")
@@ -123,9 +123,9 @@ with tab_main:
 
     if uploaded_file is not None:
         if not api_key:
-            st.warning("👈 左のサイドバーにGemini APIキーを入力してください！")
+            st.warning("👈 左のサイドバーでAIシステムが接続されているか確認してください（Secretsの設定が必要です）。")
         else:
-                if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
+            if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
                 # AI設定
                 genai.configure(api_key=api_key)
                 model = genai.GenerativeModel('gemini-pro')
