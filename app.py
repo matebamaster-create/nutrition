@@ -98,7 +98,6 @@ with st.sidebar:
 st.title("🍽️ 透析食A 献立自動チェックシステム")
 st.markdown("毎月の献立ファイル（Excel）をアップロードすると、栄養素の定量チェックとAIによる定性レビューを自動実行します。")
 
-# 大きなタブで機能を分ける
 tab_main, tab_rules = st.tabs(["🔍 献立チェック実行", "📝 定性ルールマスター管理"])
 
 # ------------------------------------------
@@ -126,12 +125,26 @@ with tab_main:
             st.warning("👈 左のサイドバーでAIシステムが接続されているか確認してください（Secretsの設定が必要です）。")
         else:
             if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
-                # AI設定
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-pro')
                 
                 with st.spinner('データを解析し、AIが献立をレビューしています...（約30秒〜1分）'):
                     try:
+                        # 【修正ポイント】使えるAIモデルを自動で検索してセットする
+                        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+                        if not available_models:
+                            st.error("❌ 利用可能なAIモデルが見つかりません。APIキーが有効か確認してください。")
+                            st.stop()
+                            
+                        preferred_models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro', 'models/gemini-pro']
+                        selected_model = available_models[0] # 保険として一番上のモデルをセット
+                        for pref in preferred_models:
+                            if pref in available_models:
+                                selected_model = pref
+                                break
+                                
+                        model_name_to_use = selected_model.replace('models/', '')
+                        model = genai.GenerativeModel(model_name_to_use)
+
                         # --- 1. Excelの読み込みとデータ抽出 ---
                         df = pd.read_excel(uploaded_file, header=None)
                         daily_data = []
@@ -205,7 +218,6 @@ with tab_main:
                         total_salt_errors = 0
                         total_pro_errors = 0
                         
-                        # AIプロンプトのベース（マスターから読み込み）
                         active_rules = load_ai_rules()
 
                         for week_idx, week in enumerate(weeks):
@@ -236,11 +248,9 @@ with tab_main:
                                     pot = nut.get("potassium_mg", 0)
                                     
                                     if menu:
-                                        # 変わり御飯カウント
                                         if meal_type in ["lunch", "dinner"] and menu[0] != "御飯":
                                             kawari_count += 1
                                             
-                                        # たんぱく質・カリウムチェック
                                         if meal_type == "breakfast":
                                             if pro > 0 and (pro < min_pro_bf or pro > max_pro_bf):
                                                 week_alerts.append(f"⚠️ **{date} {meal_name}**：たんぱく質基準外 ({pro}g / 基準{min_pro_bf}-{max_pro_bf}g)")
@@ -255,7 +265,6 @@ with tab_main:
                                         clean_menu = [m for m in menu if ":" not in m and "kcal" not in m]
                                         prompt += f"[{meal_name}] {', '.join(clean_menu)}\n"
                                         
-                            # 週ルールのチェック
                             if kawari_count > kawari_target + 1 or kawari_count < kawari_target - 1:
                                 week_alerts.append(f"📌 **今週の変わり御飯**：{kawari_count}回 (目標{kawari_target}回前後です)")
 
@@ -268,13 +277,11 @@ with tab_main:
                             })
 
                         # --- 3. 画面への結果表示（タブUI） ---
-                        st.success("✅ 全てのチェックが完了しました！以下のタブから結果を確認してください。")
+                        st.success(f"✅ 全てのチェックが完了しました！（使用AIモデル: {model_name_to_use}）")
                         
-                        # タブの生成
                         tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))]
                         result_tabs = st.tabs(tab_names)
                         
-                        # 全体サマリータブ
                         with result_tabs[0]:
                             st.subheader("今月のチェック総括")
                             colA, colB, colC = st.columns(3)
@@ -283,11 +290,9 @@ with tab_main:
                             colC.metric("解析した週", f"{len(weeks)} 週")
                             st.info("💡 各週のタブをクリックすると、日別の詳細なエラーとAIからのアドバイスが確認できます。")
                         
-                        # 各週のタブ
                         for i, tab in enumerate(result_tabs[1:]):
                             with tab:
                                 st.markdown(f"### 第{i+1}週のチェック結果")
-                                
                                 col_left, col_right = st.columns(2)
                                 
                                 with col_left:
