@@ -46,6 +46,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 RULE_FILE = "ai_rules.txt"
+MODEL_FILE = "ai_model.txt" # AIモデル名を保存するファイルを追加
 
 DEFAULT_RULES = """【朝食について】
 ・漬物やジャムなど味が偏っていないか（納豆の日は漬物を提供するなど）
@@ -64,6 +65,8 @@ DEFAULT_RULES = """【朝食について】
 ・夕食の副菜と、翌日朝食の副菜が（食材含め）一緒ではないか。
 ・夕食の主菜と、翌日昼食の主菜の食材が一緒ではないか。
 ・箸だけで食べにくい食材（豆、豆腐、ひじき等）が含まれる場合はスプーンをつける配慮がメニュー名から読み取れるか。"""
+
+DEFAULT_MODEL = "gemini-3.1-pro-preview" # デフォルトの最強モデル
 
 # ==========================================
 # 便利関数の定義
@@ -88,6 +91,17 @@ def load_ai_rules():
 def save_ai_rules(rules_text):
     with open(RULE_FILE, "w", encoding="utf-8") as f:
         f.write(rules_text)
+
+# AIモデル名の読み書き関数を追加
+def load_ai_model():
+    if os.path.exists(MODEL_FILE):
+        with open(MODEL_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return DEFAULT_MODEL
+
+def save_ai_model(model_name):
+    with open(MODEL_FILE, "w", encoding="utf-8") as f:
+        f.write(model_name.strip())
 
 # ==========================================
 # サイドバー（設定画面）
@@ -117,13 +131,26 @@ with st.sidebar:
 st.title("🍽️ 透析食A 献立自動チェックシステム")
 st.markdown("「透析食Aの決まりごと」に基づき、カロリー・塩分の主食別変動チェック、NG曜日のキーワード判定、AI定性チェックを全自動で行います。")
 
-tab_main, tab_rules = st.tabs(["🔍 献立チェック実行", "📝 定性ルールマスター管理"])
+# タブの名前を少し変更
+tab_main, tab_rules = st.tabs(["🔍 献立チェック実行", "📝 マスター管理 (ルール・AIモデル)"])
 
 with tab_rules:
+    # --- AIモデルのマスタ管理機能を追加 ---
+    st.subheader("🤖 AIモデルの管理")
+    st.info("使用するAIモデルのID（例：gemini-3.1-pro-preview）を指定します。新しいモデルが出た際はこちらを書き換えて保存してください。")
+    current_model = load_ai_model()
+    edited_model = st.text_input("▼ 現在のAIモデル", value=current_model)
+    if st.button("💾 AIモデル名を保存する", type="primary", key="btn_save_model"):
+        save_ai_model(edited_model)
+        st.success(f"使用するAIモデルを「{edited_model}」に更新しました！")
+    
+    st.markdown("---")
+    
+    # --- 従来の定性ルールのマスタ管理 ---
     st.subheader("💡 AIにチェックさせる「定性的ルール」の管理")
     current_rules = load_ai_rules()
     edited_rules = st.text_area("▼ 現在の登録ルール", value=current_rules, height=400)
-    if st.button("💾 このルールをマスターに保存する", type="primary"):
+    if st.button("💾 このルールをマスターに保存する", type="primary", key="btn_save_rules"):
         save_ai_rules(edited_rules)
         st.success("新しい定性ルールを保存しました！")
 
@@ -139,14 +166,9 @@ with tab_main:
                 
                 with st.spinner('高度なルール解析とAIレビューを実行中です...（約1分かかります）'):
                     try:
-                        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                        preferred_models = ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-1.0-pro', 'models/gemini-pro']
-                        selected_model = available_models[0] if available_models else 'models/gemini-pro'
-                        for pref in preferred_models:
-                            if pref in available_models:
-                                selected_model = pref
-                                break
-                        model = genai.GenerativeModel(selected_model.replace('models/', ''))
+                        # --- マスタからAIモデル名を読み込んでセット ---
+                        target_model = load_ai_model()
+                        model = genai.GenerativeModel(target_model)
 
                         df = pd.read_excel(uploaded_file, header=None)
                         daily_data = []
@@ -346,7 +368,7 @@ with tab_main:
                             })
 
                         # --- 3. 画面への結果表示 ---
-                        st.success(f"✅ 全ての解析が完了しました！")
+                        st.success(f"✅ 全ての解析が完了しました！（使用AIモデル: {target_model}）")
                         
                         tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))]
                         result_tabs = st.tabs(tab_names)
