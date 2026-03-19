@@ -32,6 +32,7 @@ st.markdown("""
         border-left: 5px solid;
         font-size: 0.9em;
         line-height: 1.4;
+        height: 100%; /* 高さを揃えるための工夫 */
     }
     /* 朝食：オレンジ系 */
     .meal-bf { background-color: #FFF3E0; border-left-color: #FF9800; color: #E65100; }
@@ -87,13 +88,6 @@ def load_ai_rules():
 def save_ai_rules(rules_text):
     with open(RULE_FILE, "w", encoding="utf-8") as f:
         f.write(rules_text)
-
-# クラス名判定ヘルパー
-def get_color_class(m_type):
-    if m_type == "breakfast": return "meal-bf"
-    elif m_type == "lunch": return "meal-ld"
-    elif m_type == "dinner": return "meal-dn"
-    else: return "meal-all"
 
 # ==========================================
 # サイドバー（設定画面）
@@ -236,7 +230,7 @@ with tab_main:
                                 is_monday = "(月)" in date
                                 is_sunday = "(日)" in date
                                 
-                                # 1日ルールチェック
+                                # 1日ルールチェック（全体）
                                 salt = total_nut.get("salt_equivalent_g", 0)
                                 if salt >= max_salt_daily:
                                     day_alerts.append({"type": "all", "text": f"🚨 <b>1日塩分</b> 超過 ({salt}g / {max_salt_daily}g未満)"})
@@ -373,36 +367,56 @@ with tab_main:
                                     with st.expander("AIからの生データを見る"):
                                         st.write(week_results[i]["raw_text"])
 
+                                # 日ごとにレンダリング
                                 for day_data in week_results[i]["days"]:
                                     st.markdown(f"<div class='day-container'>", unsafe_allow_html=True)
                                     st.markdown(f"#### 🗓️ {day_data['date']}")
                                     
+                                    # 1日全体の指摘（赤色）を一番上に配置
+                                    all_alerts = [a for a in day_data["alerts"] if a["type"] == "all"]
+                                    all_ai = [c for c in day_data["ai_comments"] if c["type"] == "all"]
+                                    if all_alerts or all_ai:
+                                        st.markdown("<b style='color:#C62828;'>【1日全体・その他の指摘】</b>", unsafe_allow_html=True)
+                                        for a in all_alerts:
+                                            st.markdown(f"<div class='meal-box meal-all'>{a['text']}</div>", unsafe_allow_html=True)
+                                        for c in all_ai:
+                                            st.markdown(f"<div class='meal-box meal-all'>{c['text']}</div>", unsafe_allow_html=True)
+
+                                    # ヘッダー
                                     col_m, col_q, col_ai = st.columns([2, 1.5, 2])
-                                    
-                                    with col_m:
-                                        st.caption("🍽️ 提供予定メニュー")
-                                        for m in day_data["menus"]:
-                                            cls = get_color_class(m["type"])
-                                            st.markdown(f"<div class='meal-box {cls}'>{m['text']}</div>", unsafe_allow_html=True)
-                                            
-                                    with col_q:
-                                        st.caption("📊 システム判定 (ルール・数値)")
-                                        if day_data["alerts"]:
-                                            for a in day_data["alerts"]:
-                                                cls = get_color_class(a["type"])
-                                                st.markdown(f"<div class='meal-box {cls}'>{a['text']}</div>", unsafe_allow_html=True)
-                                        else:
-                                            st.write("✅ 問題なし")
-                                            
-                                    with col_ai:
-                                        st.caption("🤖 AI定性チェック (文脈・バランス)")
-                                        if day_data["ai_comments"]:
-                                            for c in day_data["ai_comments"]:
-                                                cls = get_color_class(c["type"])
-                                                st.markdown(f"<div class='meal-box {cls}'>{c['text']}</div>", unsafe_allow_html=True)
-                                        else:
-                                            st.write("✨ 指摘なし")
-                                            
+                                    col_m.caption("🍽️ 提供予定メニュー")
+                                    col_q.caption("📊 システム判定 (ルール・数値)")
+                                    col_ai.caption("🤖 AI定性チェック (文脈・バランス)")
+
+                                    # 食事ごと（朝・昼・夕）に行を作ってレンダリング
+                                    meal_types = [("breakfast", "meal-bf"), ("lunch", "meal-ld"), ("dinner", "meal-dn")]
+                                    for m_type, css_class in meal_types:
+                                        col1, col2, col3 = st.columns([2, 1.5, 2])
+                                        
+                                        # メニュー
+                                        menus = [m for m in day_data["menus"] if m["type"] == m_type]
+                                        with col1:
+                                            for m in menus:
+                                                st.markdown(f"<div class='meal-box {css_class}'>{m['text']}</div>", unsafe_allow_html=True)
+                                                
+                                        # システムエラー
+                                        alerts = [a for a in day_data["alerts"] if a["type"] == m_type]
+                                        with col2:
+                                            if alerts:
+                                                for a in alerts:
+                                                    st.markdown(f"<div class='meal-box {css_class}'>{a['text']}</div>", unsafe_allow_html=True)
+                                            elif menus: # メニューが存在する時だけ「問題なし」を表示
+                                                st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✅ 問題なし</div>", unsafe_allow_html=True)
+                                                
+                                        # AI指摘
+                                        ai_comments = [c for c in day_data["ai_comments"] if c["type"] == m_type]
+                                        with col3:
+                                            if ai_comments:
+                                                for c in ai_comments:
+                                                    st.markdown(f"<div class='meal-box {css_class}'>{c['text']}</div>", unsafe_allow_html=True)
+                                            elif menus:
+                                                st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✨ 指摘なし</div>", unsafe_allow_html=True)
+                                                
                                     st.divider()
                                     st.markdown(f"</div>", unsafe_allow_html=True)
 
