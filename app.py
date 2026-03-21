@@ -119,9 +119,34 @@ with st.sidebar:
     
     st.markdown("---")
     st.markdown("### 📏 基準値の微調整")
-    max_salt_daily = st.number_input("1日の塩分上限 (g)", value=6.3, step=0.1)
-    max_potassium = st.number_input("昼・夕食のカリウム上限 (mg)", value=850, step=10)
-    kawari_target = st.number_input("変わり御飯の週目標 (回)", value=3, step=1)
+    
+    with st.expander("⚡ カロリー (kcal)", expanded=False):
+        min_cal_daily = st.number_input("1日の下限", value=1700, step=10)
+        max_cal_daily = st.number_input("1日の上限", value=1800, step=10)
+        min_cal_bf = st.number_input("朝食の下限", value=400, step=10)
+        max_cal_bf = st.number_input("朝食の上限(基本)", value=500, step=10)
+        max_cal_bf_bread = st.number_input("朝食の上限(パン)", value=550, step=10)
+        min_cal_ld = st.number_input("昼・夕食の下限", value=550, step=10)
+        max_cal_ld = st.number_input("昼・夕食の上限", value=750, step=10)
+
+    with st.expander("🥩 たんぱく質 (g)", expanded=False):
+        min_pro_bf = st.number_input("朝食の下限", value=10.0, step=0.5)
+        max_pro_bf = st.number_input("朝食の上限", value=15.0, step=0.5)
+        min_pro_ld = st.number_input("昼・夕食の下限", value=23.0, step=0.5)
+        max_pro_ld = st.number_input("昼・夕食の上限", value=27.0, step=0.5)
+
+    with st.expander("🧂 塩分 (g)", expanded=False):
+        max_salt_daily = st.number_input("1日の上限", value=6.3, step=0.1)
+        max_salt_bf = st.number_input("朝食の上限(基本)", value=2.0, step=0.1)
+        max_salt_bf_bread = st.number_input("朝食の上限(パン)", value=2.3, step=0.1)
+        max_salt_ld = st.number_input("昼・夕食の上限(基本)", value=2.0, step=0.1)
+        max_salt_ld_aji = st.number_input("昼・夕食の上限(味ご飯)", value=2.5, step=0.1)
+        max_salt_ld_noodle = st.number_input("昼・夕食の上限(パン/麺/等)", value=2.8, step=0.1)
+
+    with st.expander("🥦 その他", expanded=False):
+        max_potassium = st.number_input("昼・夕食のカリウム上限 (mg)", value=850, step=10)
+        kawari_target = st.number_input("変わり御飯の週目標 (回)", value=3, step=1)
+        
     st.success("設定は即座に反映されます👍")
 
 # ==========================================
@@ -260,8 +285,8 @@ with tab_main:
                                     count_salt_daily += 1 # 集計加算
                                     
                                 cal_total = total_nut.get("energy_kcal", 0)
-                                if cal_total > 0 and (cal_total < 1700 or cal_total > 1800):
-                                    day_alerts.append({"type": "all", "text": f"⚠️ <b>1日カロリー</b> 基準外 ({cal_total}kcal / 1700-1800)"})
+                                if cal_total > 0 and (cal_total < min_cal_daily or cal_total > max_cal_daily):
+                                    day_alerts.append({"type": "all", "text": f"⚠️ <b>1日カロリー</b> 基準外 ({cal_total}kcal / {min_cal_daily}-{max_cal_daily})"})
                                     count_cal_daily += 1 # 集計加算
 
                                 prompt += f"■ {date}\n"
@@ -304,31 +329,31 @@ with tab_main:
                                             
                                         # 塩分・カロリー判定
                                         if meal_type == "breakfast":
-                                            cal_limit = 550 if is_bread else 500
-                                            if cal > 0 and (cal < 400 or cal > cal_limit):
+                                            cal_limit = max_cal_bf_bread if is_bread else max_cal_bf
+                                            if cal > 0 and (cal < min_cal_bf or cal > cal_limit):
                                                 day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"})
                                                 count_nut_meal += 1
-                                            if pro > 0 and (pro < 10 or pro > 15):
+                                            if pro > 0 and (pro < min_pro_bf or pro > max_pro_bf):
                                                 day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"})
                                                 count_nut_meal += 1
-                                            salt_limit = 2.3 if is_bread else 2.0
+                                            salt_limit = max_salt_bf_bread if is_bread else max_salt_bf
                                             if meal_salt > salt_limit:
                                                 day_alerts.append({"type": meal_type, "text": f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"})
                                                 count_nut_meal += 1
                                         else:
-                                            if cal > 0 and (cal < 550 or cal > 750):
+                                            if cal > 0 and (cal < min_cal_ld or cal > max_cal_ld):
                                                 day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"})
                                                 count_nut_meal += 1
-                                            if pro > 0 and (pro < 23 or pro > 27):
+                                            if pro > 0 and (pro < min_pro_ld or pro > max_pro_ld):
                                                 day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"})
                                                 count_nut_meal += 1
                                             if pot > max_potassium:
                                                 day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カリウム</b> ({pot}mg)"})
                                                 count_nut_meal += 1
                                                 
-                                            if is_bread or is_noodle or is_curry or '炒飯' in menu_str or '高菜ピラフ' in menu_str: salt_limit = 2.8
-                                            elif is_aji_gohan: salt_limit = 2.5
-                                            else: salt_limit = 2.0
+                                            if is_bread or is_noodle or is_curry or '炒飯' in menu_str or '高菜ピラフ' in menu_str: salt_limit = max_salt_ld_noodle
+                                            elif is_aji_gohan: salt_limit = max_salt_ld_aji
+                                            else: salt_limit = max_salt_ld
                                                 
                                             if meal_salt > salt_limit:
                                                 day_alerts.append({"type": meal_type, "text": f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"})
@@ -389,7 +414,7 @@ with tab_main:
                         tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))]
                         result_tabs = st.tabs(tab_names)
                         
-                        # --- 全体サマリー画面の描画（追加箇所） ---
+                        # --- 全体サマリー画面の描画 ---
                         with result_tabs[0]:
                             st.subheader("📊 献立チェック総括")
                             
