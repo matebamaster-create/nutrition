@@ -4,3 +4,4 @@ xlrd
 google-generativeai
 matplotlib
 plotly
+openpyxl
