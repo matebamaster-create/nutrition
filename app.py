@@ -4,7 +4,7 @@ import re
 import os
 import json
 import google.generativeai as genai
-import plotly.express as px # 新しく追加したライブラリ（要requirements.txtへの追記）
+import plotly.express as px
 
 # ==========================================
 # ページ全体のデザイン設定
@@ -187,7 +187,7 @@ with tab_main:
             if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
                 genai.configure(api_key=api_key)
                 
-                with st.spinner('高度なルール解析、食材集計、AIレビューを実行中です...（約1分かかります）'):
+                with st.spinner('高度なAI解析（ルール判定・食材カテゴリ分類）を実行中です...（約1〜2分かかります）'):
                     try:
                         target_model = load_ai_model()
                         model = genai.GenerativeModel(target_model)
@@ -268,15 +268,44 @@ with tab_main:
                         count_ng = 0
                         
                         # ダッシュボード用
-                        categories = ['白身魚', '青魚', '赤魚', '牛肉', '豚肉', '鶏肉', 'ミンチ']
+                        # ユーザー指定の並び順（上から表示したい順）
+                        categories = ['白身魚', '青魚', 'その他(赤魚)', '豚肉', '鶏肉', '牛肉', 'ミンチ']
                         time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
-                        # Plotlyホバー用に詳細データを保存する構造に変更
-                        detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
                         
-                        fish_details = {'白身魚': {}, '青魚': {}, '赤魚': {}}
+                        detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
+                        fish_details = {'白身魚': {}, '青魚': {}, 'その他(赤魚)': {}}
                         fish_history = []
                         fish_alerts = []
                         kawari_weekly_counts = []
+
+                        # ==========================================
+                        # AIプロンプトの大改修（食材判定の完全委譲）
+                        # ==========================================
+                        ai_instruction = f"""あなたは病院のプロの管理栄養士です。以下の献立データを読み込み、2つのタスクを実行してください。
+
+【タスク1：定性的ルールのチェック】
+以下のルールに基づき、修正が必要なポイントをリストアップしてください。
+{active_rules}
+
+【タスク2：昼食・夕食のメイン食材のカテゴリ分類】
+各日の「昼食」と「夕食」のメニューを文脈から判断し、メインとなる食材を以下の7カテゴリのいずれかに分類してください。
+カテゴリ：[白身魚, 青魚, その他(赤魚), 牛肉, 豚肉, 鶏肉, ミンチ]
+※果物（マスカット等）や乳製品（牛乳等）、野菜（牛蒡等）を肉・魚と誤認しないよう、料理の文脈から正確に判断してください。
+※メイン食材が上記7カテゴリに該当しない場合（例：大豆製品のみ、卵のみ等）は、カテゴリ分類に含めないでください。
+※魚（白身魚、青魚、その他(赤魚)）に分類した場合は、必ず具体的な魚種名（例：サバ、サケ、タラ、アジなど）も特定してください。
+
+【出力フォーマット】
+出力は必ず以下のJSON形式のみで返してください。Markdown記号(```json)は不要です。
+
+{{
+  "alerts": [
+    {{"date": "〇月〇日(曜)", "meal": "〇食", "comment": "〇〇のため変更を検討"}}
+  ],
+  "ingredients": [
+    {{"date": "〇月〇日(曜)", "meal": "〇食", "menu_name": "判定の根拠となったメイン料理名", "category": "7カテゴリのいずれか", "fish_name": "魚種名（魚以外は空文字）"}}
+  ]
+}}
+"""
 
                         for week_idx, week in enumerate(weeks):
                             week_alerts = []
@@ -284,10 +313,7 @@ with tab_main:
                             curry_count = 0
                             day_details = []
                             
-                            prompt = f"あなたは病院のプロの管理栄養士です。以下の献立を読み込み、修正が必要なポイントをリストアップしてください。\n\n"
-                            prompt += f"【チェックしてほしい定性的ルール】\n{active_rules}\n\n"
-                            prompt += "【出力フォーマット】\n出力は必ず以下のJSON配列形式のみで返してください。Markdown記号(```json)は不要です。問題がない日は配列に含めないでください。\n"
-                            prompt += '[\n  {"date": "〇月〇日(曜)", "meal": "〇食", "comment": "〇〇のため変更を検討"}\n]\n\n'
+                            prompt = ai_instruction + "\n\n【対象の献立データ】\n"
                             
                             for day in week:
                                 date = day.get('date')
@@ -323,81 +349,9 @@ with tab_main:
                                     meal_salt = nut.get("salt_equivalent_g", 0)
                                     
                                     if menu:
-                                        # 表示用メニュー名をきれいに
+                                        # 表示用メニュー名
                                         clean_menu = [m for m in menu if ":" not in m and "kcal" not in m and not re.match(r'^\d', m)]
                                         menu_str = "".join(clean_menu)
-                                        
-                                        # --- ダッシュボード用 食材・枠判定 ---
-                                        if meal_type in ["lunch", "dinner"]:
-                                            day_type = ""
-                                            if any(d in date for d in ["(月)", "(水)", "(金)"]): day_type = "月水金"
-                                            elif any(d in date for d in ["(火)", "(木)", "(土)"]): day_type = "火木土"
-                                                
-                                            slot = f"{day_type}({'昼' if meal_type=='lunch' else '夕'})" if day_type else ""
-                                            cat_matched = None
-                                            fish_matched = None
-                                            item_matched = "" # ホバー用に具体的な料理名を保存
-                                            
-                                            # 魚の判定（料理名も取得するように強化）
-                                            for item in clean_menu:
-                                                if any(k in item for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ']):
-                                                    cat_matched = '白身魚'
-                                                    fish_matched = next((k for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ'] if k in item), '白身魚')
-                                                    item_matched = item
-                                                    break
-                                                elif any(k in item for k in ['サバ', '鯖', 'サンマ', '秋刀魚', 'アジ', '鯵', 'イワシ', 'ブリ', '鰤', '青魚']):
-                                                    cat_matched = '青魚'
-                                                    if 'サバ' in item or '鯖' in item: fish_matched = 'サバ'
-                                                    elif 'サンマ' in item or '秋刀魚' in item: fish_matched = 'サンマ'
-                                                    elif 'アジ' in item or '鯵' in item: fish_matched = 'アジ'
-                                                    elif 'ブリ' in item or '鰤' in item: fish_matched = 'ブリ'
-                                                    elif 'イワシ' in item: fish_matched = 'イワシ'
-                                                    else: fish_matched = '青魚'
-                                                    item_matched = item
-                                                    break
-                                                elif any(k in item for k in ['サケ', '鮭', 'マス', 'マス', '赤魚']):
-                                                    cat_matched = '赤魚'
-                                                    if 'サケ' in item or '鮭' in item: fish_matched = 'サケ'
-                                                    elif 'マス' in item: fish_matched = 'マス'
-                                                    else: fish_matched = '赤魚'
-                                                    item_matched = item
-                                                    break
-                                                    
-                                            # 肉の判定（魚がいなかった場合、牛肉誤カウント対策入り）
-                                            if not cat_matched:
-                                                for item in clean_menu:
-                                                    if any(k in item for k in ['ミンチ', 'ひき肉', 'そぼろ']):
-                                                        cat_matched = 'ミンチ'
-                                                        item_matched = item
-                                                        break
-                                                    # --- 修正点：牛乳、牛蒡を牛肉としてカウントしない ---
-                                                    elif '牛' in item and '牛乳' not in item and '牛蒡' not in item and 'ごぼう' not in item:
-                                                        cat_matched = '牛肉'
-                                                        item_matched = item
-                                                        break
-                                                    elif '豚' in item:
-                                                        cat_matched = '豚肉'
-                                                        item_matched = item
-                                                        break
-                                                    elif any(k in item for k in ['鶏', 'チキン']):
-                                                        cat_matched = '鶏肉'
-                                                        item_matched = item
-                                                        break
-                                                
-                                            if cat_matched and slot:
-                                                # ホバー表示用のテキストを作成
-                                                hover_text = f"{date}: {item_matched}"
-                                                detailed_cross_data[cat_matched][slot].append(hover_text)
-                                                
-                                                # 魚の内訳・連続チェック
-                                                if cat_matched in ['白身魚', '青魚', '赤魚'] and fish_matched:
-                                                    fish_details[cat_matched][fish_matched] = fish_details[cat_matched].get(fish_matched, 0) + 1
-                                                    # 近接提供チェック（中2日以内）
-                                                    for hist in fish_history:
-                                                        diff = day_index - hist['day_index']
-                                                        if hist['fish'] == fish_matched and diff <= 3 and diff > 0:
-                                                            fish_alerts.append(f"🚨 【{fish_matched}】 {hist['date']} と {date} で提供間隔が近すぎます（中2日以内）")
-                                                    fish_history.append({'date': date, 'fish': fish_matched, 'day_index': day_index})
                                         
                                         # 基本カテゴリ判定（日別エラー用）
                                         is_bread = any(k in "".join(clean_menu) for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
@@ -461,6 +415,7 @@ with tab_main:
                                         
                                 day_details.append({
                                     "date": date,
+                                    "day_index": day_index,
                                     "menus": formatted_menus,
                                     "alerts": day_alerts,
                                     "ai_comments": [] 
@@ -486,7 +441,9 @@ with tab_main:
                                 parsed_json = json.loads(clean_text.strip())
                                 parse_success = True
                                 
-                                for item in parsed_json:
+                                # AIのアラート（定性ルール）のパース
+                                ai_alerts = parsed_json.get("alerts", [])
+                                for item in ai_alerts:
                                     d = item.get("date", "")
                                     ai_meal = item.get("meal", "")
                                     if "朝" in ai_meal: m_type = "breakfast"
@@ -497,7 +454,44 @@ with tab_main:
                                     for day_d in day_details:
                                         if day_d["date"] == d:
                                             day_d["ai_comments"].append({"type": m_type, "text": f"<b>[{ai_meal}]</b> {item.get('comment', '')}"})
-                            except:
+                                            
+                                # AIの食材判定結果のパース（ダッシュボード用）
+                                ai_ingredients = parsed_json.get("ingredients", [])
+                                for item in ai_ingredients:
+                                    d = item.get("date", "")
+                                    meal_type_str = item.get("meal", "")
+                                    ai_cat = item.get("category", "")
+                                    menu_name = item.get("menu_name", "")
+                                    fish_name = item.get("fish_name", "")
+                                    
+                                    if ai_cat in categories:
+                                        day_type = ""
+                                        if any(x in d for x in ["(月)", "(水)", "(金)"]): day_type = "月水金"
+                                        elif any(x in d for x in ["(火)", "(木)", "(土)"]): day_type = "火木土"
+                                        
+                                        meal_time = ""
+                                        if "昼" in meal_type_str: meal_time = "昼"
+                                        elif "夕" in meal_type_str or "夜" in meal_type_str: meal_time = "夕"
+                                            
+                                        if day_type and meal_time:
+                                            slot = f"{day_type}({meal_time})"
+                                            hover_text = f"{d}: {menu_name}"
+                                            detailed_cross_data[ai_cat][slot].append(hover_text)
+                                            
+                                            # 魚の内訳・連続チェック
+                                            if ai_cat in ['白身魚', '青魚', 'その他(赤魚)'] and fish_name:
+                                                fish_details[ai_cat][fish_name] = fish_details[ai_cat].get(fish_name, 0) + 1
+                                                
+                                                # その日のday_indexを取得
+                                                current_day_idx = next((dd["day_index"] for dd in day_details if dd["date"] == d), 0)
+                                                
+                                                for hist in fish_history:
+                                                    diff = current_day_idx - hist['day_index']
+                                                    if hist['fish'] == fish_name and diff <= 3 and diff > 0:
+                                                        fish_alerts.append(f"🚨 【{fish_name}】 {hist['date']} と {d} で提供間隔が近すぎます（中2日以内）")
+                                                fish_history.append({'date': d, 'fish': fish_name, 'day_index': current_day_idx})
+                                                
+                            except Exception as e:
                                 parse_success = False
 
                             week_results.append({
@@ -532,16 +526,18 @@ with tab_main:
                             st.divider()
                             st.markdown("### 💡 月間バランス・ダッシュボード")
                             
-                            colA, colB = st.columns([1.5, 1]) # クロス集計を少し広く
+                            colA, colB = st.columns([1.5, 1])
                             
                             with colA:
                                 st.markdown("##### 🥩 食材の提供頻度（4枠ヒートマップ）")
                                 st.caption("👉 マス目にカーソルを合わせると、具体的な日付とメニューが表示されます。")
                                 
                                 # Plotly用のデータフレームを作成
-                                categories_reversed = categories[::-1] # 下から上に表示されるため反転
+                                # 指定されたカテゴリ順：白身魚・青魚・その他(赤魚)・豚肉・鶏肉・牛肉・ミンチ
+                                # plotly.imshowは下から上に描画されるため、リストを反転させます
+                                categories_reversed = categories[::-1] 
                                 heat_data = []
-                                hover_data = [] # ホバーテキスト用の行列
+                                hover_data = []
                                 
                                 for cat in categories_reversed:
                                     row_counts = []
@@ -549,8 +545,11 @@ with tab_main:
                                     for slot in time_slots:
                                         count = len(detailed_cross_data[cat][slot])
                                         row_counts.append(count)
-                                        # ホバー用のテキスト（日付とメニューを改行でつなぐ）
-                                        hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(detailed_cross_data[cat][slot])
+                                        # ホバー用のテキスト
+                                        if count > 0:
+                                            hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(detailed_cross_data[cat][slot])
+                                        else:
+                                            hover_text = f"<b>{cat} - {slot}</b><br>提供なし"
                                         row_hovers.append(hover_text)
                                     heat_data.append(row_counts)
                                     hover_data.append(row_hovers)
@@ -570,22 +569,22 @@ with tab_main:
                                 # ホバーの挙動をカスタマイズ
                                 fig.update_traces(hovertemplate="%{customdata}<extra></extra>", customdata=hover_data)
                                 
-                                # レイアウトの調整（見やすさ重視）
+                                # レイアウトの調整
                                 fig.update_layout(
                                     xaxis_title="",
                                     yaxis_title="",
-                                    coloraxis_showscale=False, # カラーバーを非表示にしてスッキリ
-                                    margin=dict(l=10, r=10, t=10, b=10), # 余白を詰める
-                                    height=350, # 高さを固定
-                                    font=dict(size=12)
+                                    coloraxis_showscale=False,
+                                    margin=dict(l=10, r=10, t=10, b=10),
+                                    height=350,
+                                    font=dict(size=13)
                                 )
-                                # X軸のラベル（曜日・昼夜）を少し傾けて見やすく
-                                fig.update_xaxes(tickangle=0, side="top") # ラベルを上に配置
+                                # X軸のラベル（曜日・昼夜）を上に配置
+                                fig.update_xaxes(tickangle=0, side="top")
                                 
-                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}) # グラフ操作バーを非表示
+                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
                                 
                                 st.markdown("##### 🐟 今月の魚種バリエーション内訳")
-                                for cat in ['白身魚', '青魚', '赤魚']:
+                                for cat in ['白身魚', '青魚', 'その他(赤魚)']:
                                     details = ", ".join([f"{f}({c}回)" for f, c in fish_details[cat].items()])
                                     st.markdown(f"<span style='font-size:0.9em;'><b>[{cat}]</b> {details if details else 'なし'}</span>", unsafe_allow_html=True)
 
