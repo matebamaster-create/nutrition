@@ -5,6 +5,7 @@ import os
 import json
 import google.generativeai as genai
 import plotly.express as px
+import plotly.graph_objects as go # 棒グラフのカスタマイズ用に追加
 
 # ==========================================
 # ページ全体のデザイン設定
@@ -251,7 +252,6 @@ with tab_main:
                                 current_week = []
                         if current_week: weeks.append(current_week)
                         
-                        # 日数ベースの通し番号を付与（魚の近接チェック用）
                         day_idx_counter = 0
                         for week in weeks:
                             for day in week:
@@ -261,17 +261,14 @@ with tab_main:
                         week_results = []
                         active_rules = load_ai_rules()
                         
-                        # --- 全体サマリー用の集計カウンター・配列 ---
                         count_salt_daily = 0
                         count_cal_daily = 0
                         count_nut_meal = 0
                         count_ng = 0
                         
-                        # ダッシュボード用
-                        # ユーザー指定の並び順（上から表示したい順）
+                        # 指定されたヒートマップ並び順
                         categories = ['白身魚', '青魚', 'その他(赤魚)', '豚肉', '鶏肉', '牛肉', 'ミンチ']
                         time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
-                        
                         detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
                         fish_details = {'白身魚': {}, '青魚': {}, 'その他(赤魚)': {}}
                         fish_history = []
@@ -279,7 +276,7 @@ with tab_main:
                         kawari_weekly_counts = []
 
                         # ==========================================
-                        # AIプロンプトの大改修（食材判定の完全委譲）
+                        # AIプロンプト（タスク1&2同時実行・ ингредиенты抽出）
                         # ==========================================
                         ai_instruction = f"""あなたは病院のプロの管理栄養士です。以下の献立データを読み込み、2つのタスクを実行してください。
 
@@ -353,7 +350,7 @@ with tab_main:
                                         clean_menu = [m for m in menu if ":" not in m and "kcal" not in m and not re.match(r'^\d', m)]
                                         menu_str = "".join(clean_menu)
                                         
-                                        # 基本カテゴリ判定（日別エラー用）
+                                        # 基本カテゴリ判定（日別定量エラー用）
                                         is_bread = any(k in "".join(clean_menu) for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
                                         is_noodle = any(k in "".join(clean_menu) for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
                                         is_aji_gohan = any(k in "".join(clean_menu) for k in ['ピラフ', '炒飯', 'チャーハン', 'かしわ飯', '炊き込み', '丼', '寿司', 'オムライス', 'ビーフシチュー'])
@@ -421,7 +418,6 @@ with tab_main:
                                     "ai_comments": [] 
                                 })
                             
-                            # 週ごとの変わり御飯をグラフ用に保存
                             kawari_weekly_counts.append(kawari_count)
                             
                             if kawari_count > kawari_target + 1 or kawari_count < kawari_target - 1:
@@ -431,7 +427,7 @@ with tab_main:
                                 week_alerts.append(f"❌ **カレーライス**：今週の提供がありません (週1回必須)")
                                 count_ng += 1
 
-                            # AIへ送信し、JSONとしてパース
+                            # AIへ送信
                             response = model.generate_content(prompt)
                             ai_raw_text = response.text
                             
@@ -441,7 +437,7 @@ with tab_main:
                                 parsed_json = json.loads(clean_text.strip())
                                 parse_success = True
                                 
-                                # AIのアラート（定性ルール）のパース
+                                # AIのアラート（定性ルール判定）
                                 ai_alerts = parsed_json.get("alerts", [])
                                 for item in ai_alerts:
                                     d = item.get("date", "")
@@ -455,7 +451,7 @@ with tab_main:
                                         if day_d["date"] == d:
                                             day_d["ai_comments"].append({"type": m_type, "text": f"<b>[{ai_meal}]</b> {item.get('comment', '')}"})
                                             
-                                # AIの食材判定結果のパース（ダッシュボード用）
+                                # AIの食材判定結果（ダッシュボード用）
                                 ai_ingredients = parsed_json.get("ingredients", [])
                                 for item in ai_ingredients:
                                     d = item.get("date", "")
@@ -482,7 +478,7 @@ with tab_main:
                                             if ai_cat in ['白身魚', '青魚', 'その他(赤魚)'] and fish_name:
                                                 fish_details[ai_cat][fish_name] = fish_details[ai_cat].get(fish_name, 0) + 1
                                                 
-                                                # その日のday_indexを取得
+                                                # day_indexを取得
                                                 current_day_idx = next((dd["day_index"] for dd in day_details if dd["date"] == d), 0)
                                                 
                                                 for hist in fish_history:
@@ -501,7 +497,6 @@ with tab_main:
                                 "raw_text": ai_raw_text
                             })
 
-                        # --- 3. 画面への結果表示 ---
                         st.success(f"✅ 全ての解析が完了しました！（使用AIモデル: {target_model}）")
                         
                         tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))]
@@ -529,23 +524,20 @@ with tab_main:
                             colA, colB = st.columns([1.5, 1])
                             
                             with colA:
+                                # --- 修正点3: 色味を柔らかいグラデーションに変更（OrRd） ---
                                 st.markdown("##### 🥩 食材の提供頻度（4枠ヒートマップ）")
                                 st.caption("👉 マス目にカーソルを合わせると、具体的な日付とメニューが表示されます。")
                                 
-                                # Plotly用のデータフレームを作成
-                                # 指定されたカテゴリ順：白身魚・青魚・その他(赤魚)・豚肉・鶏肉・牛肉・ミンチ
-                                # plotly.imshowは下から上に描画されるため、リストを反転させます
-                                categories_reversed = categories[::-1] 
+                                categories_for_heat = categories # 並び順
                                 heat_data = []
                                 hover_data = []
                                 
-                                for cat in categories_reversed:
+                                for cat in categories_for_heat:
                                     row_counts = []
                                     row_hovers = []
                                     for slot in time_slots:
                                         count = len(detailed_cross_data[cat][slot])
                                         row_counts.append(count)
-                                        # ホバー用のテキスト
                                         if count > 0:
                                             hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(detailed_cross_data[cat][slot])
                                         else:
@@ -554,31 +546,28 @@ with tab_main:
                                     heat_data.append(row_counts)
                                     hover_data.append(row_hovers)
                                 
-                                df_heat = pd.DataFrame(heat_data, index=categories_reversed, columns=time_slots)
+                                df_heat = pd.DataFrame(heat_data, index=categories_for_heat, columns=time_slots)
                                 
-                                # Plotly Expressでヒートマップを作成
+                                # --- 修正点1: yaxis_autorange='reversed' で一番上を「白身魚」にする ---
                                 fig = px.imshow(df_heat,
                                                 labels=dict(x="提供枠", y="食材カテゴリ", color="提供回数"),
                                                 x=time_slots,
-                                                y=categories_reversed,
-                                                color_continuous_scale="Reds", # 赤系のグラデーション
+                                                y=categories_for_heat,
+                                                color_continuous_scale="OrRd", # 柔らかい赤・オレンジ系に変更
                                                 aspect="auto",
-                                                text_auto=True # 数字を表示
+                                                text_auto=True 
                                                )
-                                
-                                # ホバーの挙動をカスタマイズ
                                 fig.update_traces(hovertemplate="%{customdata}<extra></extra>", customdata=hover_data)
                                 
-                                # レイアウトの調整
                                 fig.update_layout(
                                     xaxis_title="",
                                     yaxis_title="",
                                     coloraxis_showscale=False,
                                     margin=dict(l=10, r=10, t=10, b=10),
-                                    height=350,
-                                    font=dict(size=13)
+                                    height=360,
+                                    font=dict(size=13),
+                                    yaxis=dict(autorange='reversed') # これで上が「白身魚」になる
                                 )
-                                # X軸のラベル（曜日・昼夜）を上に配置
                                 fig.update_xaxes(tickangle=0, side="top")
                                 
                                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
@@ -589,14 +578,42 @@ with tab_main:
                                     st.markdown(f"<span style='font-size:0.9em;'><b>[{cat}]</b> {details if details else 'なし'}</span>", unsafe_allow_html=True)
 
                             with colB:
-                                st.markdown("##### 🍚 変わり御飯の提供ペース（週別トレンド）")
-                                week_names = [f"第{i+1}週" for i in range(len(weeks))]
-                                df_kawari = pd.DataFrame({'変わり御飯(回)': kawari_weekly_counts}, index=week_names)
-                                st.bar_chart(df_kawari, color="#FF9800", height=200)
+                                # --- 修正点2: 変わり御飯のペースを「上から第1週、第2週」の縦並びにする ---
+                                st.markdown("##### 🍚 変わり御飯の提供ペース（カレンダー順）")
+                                
+                                week_names_ordered = [f"第{i+1}週" for i in range(len(weeks))]
+                                # 下から上へ描画されるPlotlyExpressの仕様に合わせ、データは反転させるが、Y軸を反転させる
+                                df_kawari = pd.DataFrame({
+                                    '週': week_names_ordered,
+                                    '変わり御飯(回)': kawari_weekly_counts
+                                })
+                                
+                                fig_kawari = px.bar(df_kawari, 
+                                                   x='変わり御飯(回)', 
+                                                   y='週', 
+                                                   orientation='h', # 横向きの棒グラフ
+                                                   text='変わり御飯(回)', # 棒の上に数字を表示
+                                                   color='変わり御飯(回)', # 回数で色を分ける
+                                                   color_continuous_scale="Oranges" # 柔らかいオレンジ系
+                                                  )
+                                
+                                fig_kawari.update_traces(textposition='outside') # 数字を棒の外側に
+
+                                fig_kawari.update_layout(
+                                    xaxis_title="",
+                                    yaxis_title="",
+                                    height=250,
+                                    margin=dict(l=10, r=10, t=10, b=10),
+                                    coloraxis_showscale=False, # カラーバーを非表示
+                                    yaxis=dict(autorange='reversed') # これで上が「第1週」になる
+                                )
+                                fig_kawari.update_xaxes(showticklabels=False, showgrid=False) # X軸をスッキリ
+
+                                st.plotly_chart(fig_kawari, use_container_width=True, config={'displayModeBar': False})
                                 
                                 if fish_alerts:
                                     st.markdown("##### 🚨 食材の連続・近接提供アラート")
-                                    # 重複を排除して表示
+                                    # 重複排除
                                     unique_fish_alerts = []
                                     for alert in fish_alerts:
                                         if alert not in unique_fish_alerts:
@@ -621,7 +638,6 @@ with tab_main:
                                     st.markdown(f"<div class='day-container'>", unsafe_allow_html=True)
                                     st.markdown(f"#### 🗓️ {day_data['date']}")
                                     
-                                    # 1日全体の指摘（赤色）を一番上に配置
                                     all_alerts = [a for a in day_data["alerts"] if a["type"] == "all"]
                                     all_ai = [c for c in day_data["ai_comments"] if c["type"] == "all"]
                                     if all_alerts or all_ai:
@@ -631,33 +647,28 @@ with tab_main:
                                         for c in all_ai:
                                             st.markdown(f"<div class='meal-box meal-all'>{c['text']}</div>", unsafe_allow_html=True)
 
-                                    # ヘッダー
                                     col_m, col_q, col_ai = st.columns([2, 1.5, 2])
                                     col_m.caption("🍽️ 提供予定メニュー")
                                     col_q.caption("📊 システム判定 (ルール・数値)")
                                     col_ai.caption("🤖 AI定性チェック (文脈・バランス)")
 
-                                    # 食事ごと（朝・昼・夕）に行を作ってレンダリング
                                     meal_types = [("breakfast", "meal-bf"), ("lunch", "meal-ld"), ("dinner", "meal-dn")]
                                     for m_type, css_class in meal_types:
                                         col1, col2, col3 = st.columns([2, 1.5, 2])
                                         
-                                        # メニュー
                                         menus = [m for m in day_data["menus"] if m["type"] == m_type]
                                         with col1:
                                             for m in menus:
                                                 st.markdown(f"<div class='meal-box {css_class}'>{m['text']}</div>", unsafe_allow_html=True)
                                                 
-                                        # システムエラー
                                         alerts = [a for a in day_data["alerts"] if a["type"] == m_type]
                                         with col2:
                                             if alerts:
                                                 for a in alerts:
                                                     st.markdown(f"<div class='meal-box {css_class}'>{a['text']}</div>", unsafe_allow_html=True)
-                                            elif menus: # メニューが存在する時だけ「問題なし」を表示
+                                            elif menus:
                                                 st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✅ 問題なし</div>", unsafe_allow_html=True)
                                                 
-                                        # AI指摘
                                         ai_comments = [c for c in day_data["ai_comments"] if c["type"] == m_type]
                                         with col3:
                                             if ai_comments:
