@@ -3,9 +3,10 @@ import pandas as pd
 import re
 import os
 import json
+import io # Excel出力用に新たに追加
 import google.generativeai as genai
 import plotly.express as px
-import plotly.graph_objects as go # 棒グラフのカスタマイズ用に追加
+import plotly.graph_objects as go
 
 # ==========================================
 # ページ全体のデザイン設定
@@ -26,7 +27,6 @@ st.markdown("""
     .stTabs [data-baseweb="tab"] { padding-top: 10px; padding-bottom: 10px; border-radius: 5px 5px 0 0; }
     .day-container { padding: 10px 0px; }
     
-    /* 食事別カラーボックスのベーススタイル */
     .meal-box {
         padding: 8px 12px;
         margin-bottom: 8px;
@@ -99,6 +99,10 @@ def load_ai_model():
 def save_ai_model(model_name):
     with open(MODEL_FILE, "w", encoding="utf-8") as f:
         f.write(model_name.strip())
+
+# HTMLタグ除去ツール（Excel出力用）
+def strip_html(text):
+    return re.sub(r'<[^>]+>', '', text)
 
 # ==========================================
 # サイドバー（設定画面）
@@ -182,103 +186,111 @@ with tab_main:
     uploaded_file = st.file_uploader("📂 献立ファイルのアップロード（.xls または .xlsx）", type=['xls', 'xlsx'])
 
     if uploaded_file is not None:
+        # 新しいファイルがアップロードされたらキャッシュをクリア
+        if "last_uploaded" not in st.session_state or st.session_state.last_uploaded != uploaded_file.name:
+            st.session_state.processed = False
+            st.session_state.last_uploaded = uploaded_file.name
+            if "analysis_results" in st.session_state:
+                del st.session_state.analysis_results
+
         if not api_key:
             st.warning("👈 左のサイドバーでAIシステムが接続されているか確認してください。")
         else:
-            if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
-                genai.configure(api_key=api_key)
-                
-                with st.spinner('高度なAI解析（ルール判定・食材カテゴリ分類）を実行中です...（約1〜2分かかります）'):
-                    try:
-                        target_model = load_ai_model()
-                        model = genai.GenerativeModel(target_model)
+            # 解析がまだ実行されていない場合、ボタンを表示
+            if not st.session_state.get("processed", False):
+                if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
+                    genai.configure(api_key=api_key)
+                    
+                    with st.spinner('高度なAI解析（ルール判定・食材カテゴリ分類）を実行中です...（約1〜2分かかります）'):
+                        try:
+                            target_model = load_ai_model()
+                            model = genai.GenerativeModel(target_model)
 
-                        df = pd.read_excel(uploaded_file, header=None)
-                        daily_data = []
-                        
-                        for i in range(len(df)):
-                            date_col_base = -1
-                            for c in range(3, 8):
-                                val = get_cell(df, i, c)
-                                if "月" in val and "日" in val and "(" in val:
-                                    date_col_base = c
-                                    break
+                            df = pd.read_excel(uploaded_file, header=None)
+                            daily_data = []
                             
-                            if date_col_base != -1:
-                                date_row_idx = i
-                                for day_idx in range(7):
-                                    col_idx = date_col_base + (day_idx * 16)
-                                    date_str = get_cell(df, date_row_idx, col_idx)
-                                    if not date_str: continue
-                                        
-                                    day_data = {
-                                        "date": date_str,
-                                        "meals": {"breakfast": {"menu": [], "nutrients": {}}, "lunch": {"menu": [], "nutrients": {}}, "dinner": {"menu": [], "nutrients": {}}},
-                                        "daily_total_nutrients": {}
-                                    }
-                                    
-                                    states = ['breakfast', 'lunch', 'dinner', 'daily_total']
-                                    state_idx = 0
-                                    r = date_row_idx + 1
-                                    
-                                    while r < min(len(df), date_row_idx + 60) and state_idx < len(states):
-                                        current_state = states[state_idx]
-                                        cell = get_cell(df, r, col_idx)
-                                        
-                                        if "ｴﾈﾙｷﾞｰ" in cell or "kcal" in cell.lower():
-                                            n_data = {
-                                                "energy_kcal": extract_number(get_cell(df, r, col_idx)),
-                                                "protein_g": extract_number(get_cell(df, r, col_idx + 8)),
-                                                "potassium_mg": extract_number(get_cell(df, r+2, col_idx + 8)),
-                                                "salt_equivalent_g": extract_number(get_cell(df, r+3, col_idx + 8))
-                                            }
-                                            if current_state == 'daily_total': day_data["daily_total_nutrients"] = n_data
-                                            else: day_data["meals"][current_state]["nutrients"] = n_data
-                                            state_idx += 1
-                                            r += 4 
-                                            continue
+                            for i in range(len(df)):
+                                date_col_base = -1
+                                for c in range(3, 8):
+                                    val = get_cell(df, i, c)
+                                    if "月" in val and "日" in val and "(" in val:
+                                        date_col_base = c
+                                        break
+                                
+                                if date_col_base != -1:
+                                    date_row_idx = i
+                                    for day_idx in range(7):
+                                        col_idx = date_col_base + (day_idx * 16)
+                                        date_str = get_cell(df, date_row_idx, col_idx)
+                                        if not date_str: continue
                                             
-                                        if cell and current_state != 'daily_total':
-                                            day_data["meals"][current_state]["menu"].append(cell)
-                                        r += 1
-                                    daily_data.append(day_data)
+                                        day_data = {
+                                            "date": date_str,
+                                            "meals": {"breakfast": {"menu": [], "nutrients": {}}, "lunch": {"menu": [], "nutrients": {}}, "dinner": {"menu": [], "nutrients": {}}},
+                                            "daily_total_nutrients": {}
+                                        }
+                                        
+                                        states = ['breakfast', 'lunch', 'dinner', 'daily_total']
+                                        state_idx = 0
+                                        r = date_row_idx + 1
+                                        
+                                        while r < min(len(df), date_row_idx + 60) and state_idx < len(states):
+                                            current_state = states[state_idx]
+                                            cell = get_cell(df, r, col_idx)
+                                            
+                                            if "ｴﾈﾙｷﾞｰ" in cell or "kcal" in cell.lower():
+                                                n_data = {
+                                                    "energy_kcal": extract_number(get_cell(df, r, col_idx)),
+                                                    "protein_g": extract_number(get_cell(df, r, col_idx + 8)),
+                                                    "potassium_mg": extract_number(get_cell(df, r+2, col_idx + 8)),
+                                                    "salt_equivalent_g": extract_number(get_cell(df, r+3, col_idx + 8))
+                                                }
+                                                if current_state == 'daily_total': day_data["daily_total_nutrients"] = n_data
+                                                else: day_data["meals"][current_state]["nutrients"] = n_data
+                                                state_idx += 1
+                                                r += 4 
+                                                continue
+                                                
+                                            if cell and current_state != 'daily_total':
+                                                day_data["meals"][current_state]["menu"].append(cell)
+                                            r += 1
+                                        daily_data.append(day_data)
 
-                        weeks = []
-                        current_week = []
-                        for day in daily_data:
-                            current_week.append(day)
-                            if "(日)" in day.get("date", ""):
-                                weeks.append(current_week)
-                                current_week = []
-                        if current_week: weeks.append(current_week)
-                        
-                        day_idx_counter = 0
-                        for week in weeks:
-                            for day in week:
-                                day['day_index'] = day_idx_counter
-                                day_idx_counter += 1
+                            weeks = []
+                            current_week = []
+                            for day in daily_data:
+                                current_week.append(day)
+                                if "(日)" in day.get("date", ""):
+                                    weeks.append(current_week)
+                                    current_week = []
+                            if current_week: weeks.append(current_week)
+                            
+                            day_idx_counter = 0
+                            for week in weeks:
+                                for day in week:
+                                    day['day_index'] = day_idx_counter
+                                    day_idx_counter += 1
 
-                        week_results = []
-                        active_rules = load_ai_rules()
-                        
-                        count_salt_daily = 0
-                        count_cal_daily = 0
-                        count_nut_meal = 0
-                        count_ng = 0
-                        
-                        # 指定されたヒートマップ並び順
-                        categories = ['白身魚', '青魚', 'その他(赤魚)', '豚肉', '鶏肉', '牛肉', 'ミンチ']
-                        time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
-                        detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
-                        fish_details = {'白身魚': {}, '青魚': {}, 'その他(赤魚)': {}}
-                        fish_history = []
-                        fish_alerts = []
-                        kawari_weekly_counts = []
+                            week_results = []
+                            active_rules = load_ai_rules()
+                            
+                            count_salt_daily = 0
+                            count_cal_daily = 0
+                            count_nut_meal = 0
+                            count_ng = 0
+                            
+                            categories = ['白身魚', '青魚', 'その他(赤魚)', '豚肉', '鶏肉', '牛肉', 'ミンチ']
+                            time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
+                            detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
+                            fish_details = {'白身魚': {}, '青魚': {}, 'その他(赤魚)': {}}
+                            fish_history = []
+                            fish_alerts = []
+                            kawari_weekly_counts = []
+                            
+                            # Excel出力用の全アラートリスト
+                            export_alerts_list = []
 
-                        # ==========================================
-                        # AIプロンプト（タスク1&2同時実行・ ингредиенты抽出）
-                        # ==========================================
-                        ai_instruction = f"""あなたは病院のプロの管理栄養士です。以下の献立データを読み込み、2つのタスクを実行してください。
+                            ai_instruction = f"""あなたは病院のプロの管理栄養士です。以下の献立データを読み込み、2つのタスクを実行してください。
 
 【タスク1：定性的ルールのチェック】
 以下のルールに基づき、修正が必要なポイントをリストアップしてください。
@@ -288,7 +300,7 @@ with tab_main:
 各日の「昼食」と「夕食」のメニューを文脈から判断し、メインとなる食材を以下の7カテゴリのいずれかに分類してください。
 カテゴリ：[白身魚, 青魚, その他(赤魚), 牛肉, 豚肉, 鶏肉, ミンチ]
 ※果物（マスカット等）や乳製品（牛乳等）、野菜（牛蒡等）を肉・魚と誤認しないよう、料理の文脈から正確に判断してください。
-※メイン食材が上記7カテゴリに該当しない場合（例：大豆製品のみ、卵のみ等）は、カテゴリ分類に含めないでください。
+※メイン食材が上記7カテゴリに該当しない場合はカテゴリ分類に含めないでください。
 ※魚（白身魚、青魚、その他(赤魚)）に分類した場合は、必ず具体的な魚種名（例：サバ、サケ、タラ、アジなど）も特定してください。
 
 【出力フォーマット】
@@ -304,381 +316,448 @@ with tab_main:
 }}
 """
 
-                        for week_idx, week in enumerate(weeks):
-                            week_alerts = []
-                            kawari_count = 0
-                            curry_count = 0
-                            day_details = []
-                            
-                            prompt = ai_instruction + "\n\n【対象の献立データ】\n"
-                            
-                            for day in week:
-                                date = day.get('date')
-                                day_index = day.get('day_index', 0)
-                                total_nut = day.get("daily_total_nutrients", {})
-                                day_alerts = []
-                                formatted_menus = []
+                            for week_idx, week in enumerate(weeks):
+                                week_alerts = []
+                                kawari_count = 0
+                                curry_count = 0
+                                day_details = []
                                 
-                                is_monday = "(月)" in date
-                                is_sunday = "(日)" in date
+                                prompt = ai_instruction + "\n\n【対象の献立データ】\n"
                                 
-                                # 1日ルールチェック
-                                salt = total_nut.get("salt_equivalent_g", 0)
-                                if salt >= max_salt_daily:
-                                    day_alerts.append({"type": "all", "text": f"🚨 <b>1日塩分</b> 超過 ({salt}g / {max_salt_daily}g未満)"})
-                                    count_salt_daily += 1
+                                for day in week:
+                                    date = day.get('date')
+                                    day_index = day.get('day_index', 0)
+                                    total_nut = day.get("daily_total_nutrients", {})
+                                    day_alerts = []
+                                    formatted_menus = []
                                     
-                                cal_total = total_nut.get("energy_kcal", 0)
-                                if cal_total > 0 and (cal_total < min_cal_daily or cal_total > max_cal_daily):
-                                    day_alerts.append({"type": "all", "text": f"⚠️ <b>1日カロリー</b> 基準外 ({cal_total}kcal / {min_cal_daily}-{max_cal_daily})"})
-                                    count_cal_daily += 1
+                                    is_monday = "(月)" in date
+                                    is_sunday = "(日)" in date
+                                    
+                                    # 1日ルールチェック
+                                    salt = total_nut.get("salt_equivalent_g", 0)
+                                    if salt >= max_salt_daily:
+                                        msg = f"🚨 <b>1日塩分</b> 超過 ({salt}g / {max_salt_daily}g未満)"
+                                        day_alerts.append({"type": "all", "text": msg})
+                                        export_alerts_list.append({"出力": True, "日付": date, "食事": "all", "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                        count_salt_daily += 1
+                                        
+                                    cal_total = total_nut.get("energy_kcal", 0)
+                                    if cal_total > 0 and (cal_total < min_cal_daily or cal_total > max_cal_daily):
+                                        msg = f"⚠️ <b>1日カロリー</b> 基準外 ({cal_total}kcal / {min_cal_daily}-{max_cal_daily})"
+                                        day_alerts.append({"type": "all", "text": msg})
+                                        export_alerts_list.append({"出力": True, "日付": date, "食事": "all", "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                        count_cal_daily += 1
 
-                                prompt += f"■ {date}\n"
+                                    prompt += f"■ {date}\n"
+                                    
+                                    for meal_type, meal_name in [("breakfast", "朝食"), ("lunch", "昼食"), ("dinner", "夕食")]:
+                                        meal_data = day.get("meals", {}).get(meal_type, {})
+                                        menu = meal_data.get("menu", [])
+                                        nut = meal_data.get("nutrients", {})
+                                        
+                                        pro = nut.get("protein_g", 0)
+                                        pot = nut.get("potassium_mg", 0)
+                                        cal = nut.get("energy_kcal", 0)
+                                        meal_salt = nut.get("salt_equivalent_g", 0)
+                                        
+                                        if menu:
+                                            clean_menu = [m for m in menu if ":" not in m and "kcal" not in m and not re.match(r'^\d', m)]
+                                            menu_str = "".join(clean_menu)
+                                            
+                                            is_bread = any(k in "".join(clean_menu) for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
+                                            is_noodle = any(k in "".join(clean_menu) for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
+                                            is_aji_gohan = any(k in "".join(clean_menu) for k in ['ピラフ', '炒飯', 'チャーハン', 'かしわ飯', '炊き込み', '丼', '寿司', 'オムライス', 'ビーフシチュー'])
+                                            is_curry = 'カレー' in "".join(clean_menu)
+                                            is_natto = '納豆' in "".join(clean_menu)
+                                            
+                                            # NG判定
+                                            if is_natto and (is_sunday or is_monday):
+                                                msg = f"❌ <b>[{meal_name}]</b> 日・月の納豆提供はNG"
+                                                day_alerts.append({"type": meal_type, "text": msg})
+                                                export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                count_ng += 1
+                                            if is_bread and meal_type == "dinner":
+                                                msg = f"❌ <b>[{meal_name}]</b> 夕食のパン提供はNG"
+                                                day_alerts.append({"type": meal_type, "text": msg})
+                                                export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                count_ng += 1
+                                            if is_bread and is_monday:
+                                                msg = f"❌ <b>[{meal_name}]</b> 月曜のパン提供はNG"
+                                                day_alerts.append({"type": meal_type, "text": msg})
+                                                export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                count_ng += 1
+                                            if is_noodle and meal_type == "dinner":
+                                                msg = f"❌ <b>[{meal_name}]</b> 夕食の麺類(汁あり)はNG"
+                                                day_alerts.append({"type": meal_type, "text": msg})
+                                                export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                count_ng += 1
+                                                
+                                            if is_curry: curry_count += 1
+                                            if meal_type in ["lunch", "dinner"] and (is_bread or is_noodle or is_aji_gohan or (menu and menu[0] != "御飯" and menu[0] != "全粥")):
+                                                kawari_count += 1
+                                                
+                                            # 塩分・カロリー判定
+                                            if meal_type == "breakfast":
+                                                cal_limit = max_cal_bf_bread if is_bread else max_cal_bf
+                                                if cal > 0 and (cal < min_cal_bf or cal > cal_limit):
+                                                    msg = f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                if pro > 0 and (pro < min_pro_bf or pro > max_pro_bf):
+                                                    msg = f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                salt_limit = max_salt_bf_bread if is_bread else max_salt_bf
+                                                if meal_salt > salt_limit:
+                                                    msg = f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                            else:
+                                                if cal > 0 and (cal < min_cal_ld or cal > max_cal_ld):
+                                                    msg = f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                if pro > 0 and (pro < min_pro_ld or pro > max_pro_ld):
+                                                    msg = f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                if pot > max_potassium:
+                                                    msg = f"⚠️ <b>[{meal_name}] カリウム</b> ({pot}mg)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                    
+                                                if is_bread or is_noodle or is_curry or '炒飯' in menu_str or '高菜ピラフ' in menu_str: salt_limit = max_salt_ld_noodle
+                                                elif is_aji_gohan: salt_limit = max_salt_ld_aji
+                                                else: salt_limit = max_salt_ld
+                                                    
+                                                if meal_salt > salt_limit:
+                                                    msg = f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"
+                                                    day_alerts.append({"type": meal_type, "text": msg})
+                                                    export_alerts_list.append({"出力": True, "日付": date, "食事": meal_type, "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                                    count_nut_meal += 1
+                                                    
+                                            formatted_menus.append({"type": meal_type, "text": f"<b>[{meal_name}]</b> {', '.join(clean_menu)}"})
+                                            prompt += f"[{meal_name}] {', '.join(clean_menu)}\n"
+                                            
+                                    day_details.append({
+                                        "date": date,
+                                        "day_index": day_index,
+                                        "menus": formatted_menus,
+                                        "alerts": day_alerts,
+                                        "ai_comments": [] 
+                                    })
                                 
-                                for meal_type, meal_name in [("breakfast", "朝食"), ("lunch", "昼食"), ("dinner", "夕食")]:
-                                    meal_data = day.get("meals", {}).get(meal_type, {})
-                                    menu = meal_data.get("menu", [])
-                                    nut = meal_data.get("nutrients", {})
+                                kawari_weekly_counts.append(kawari_count)
+                                
+                                if kawari_count > kawari_target + 1 or kawari_count < kawari_target - 1:
+                                    msg = f"📌 **変わり御飯**：今週{kawari_count}回 (目標{kawari_target}回前後)"
+                                    week_alerts.append(msg)
+                                    export_alerts_list.append({"出力": True, "日付": f"第{week_idx+1}週", "食事": "all", "判定元": "定量/ルール", "指摘内容": msg})
+                                    count_ng += 1
+                                if curry_count == 0:
+                                    msg = f"❌ **カレーライス**：今週の提供がありません (週1回必須)"
+                                    week_alerts.append(msg)
+                                    export_alerts_list.append({"出力": True, "日付": f"第{week_idx+1}週", "食事": "all", "判定元": "定量/ルール", "指摘内容": strip_html(msg)})
+                                    count_ng += 1
+
+                                # AIへ送信
+                                response = model.generate_content(prompt)
+                                ai_raw_text = response.text
+                                
+                                try:
+                                    clean_text = re.sub(r'```json\n?', '', ai_raw_text)
+                                    clean_text = re.sub(r'```\n?', '', clean_text)
+                                    parsed_json = json.loads(clean_text.strip())
+                                    parse_success = True
                                     
-                                    pro = nut.get("protein_g", 0)
-                                    pot = nut.get("potassium_mg", 0)
-                                    cal = nut.get("energy_kcal", 0)
-                                    meal_salt = nut.get("salt_equivalent_g", 0)
-                                    
-                                    if menu:
-                                        # 表示用メニュー名
-                                        clean_menu = [m for m in menu if ":" not in m and "kcal" not in m and not re.match(r'^\d', m)]
-                                        menu_str = "".join(clean_menu)
+                                    # AIのアラート
+                                    ai_alerts = parsed_json.get("alerts", [])
+                                    for item in ai_alerts:
+                                        d = item.get("date", "")
+                                        ai_meal = item.get("meal", "")
+                                        if "朝" in ai_meal: m_type = "breakfast"
+                                        elif "昼" in ai_meal: m_type = "lunch"
+                                        elif "夕" in ai_meal or "夜" in ai_meal: m_type = "dinner"
+                                        else: m_type = "all"
                                         
-                                        # 基本カテゴリ判定（日別定量エラー用）
-                                        is_bread = any(k in "".join(clean_menu) for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
-                                        is_noodle = any(k in "".join(clean_menu) for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
-                                        is_aji_gohan = any(k in "".join(clean_menu) for k in ['ピラフ', '炒飯', 'チャーハン', 'かしわ飯', '炊き込み', '丼', '寿司', 'オムライス', 'ビーフシチュー'])
-                                        is_curry = 'カレー' in "".join(clean_menu)
-                                        is_natto = '納豆' in "".join(clean_menu)
+                                        msg = f"<b>[{ai_meal}]</b> {item.get('comment', '')}"
+                                        export_alerts_list.append({"出力": True, "日付": d, "食事": m_type, "判定元": "AI定性", "指摘内容": strip_html(msg)})
+
+                                        for day_d in day_details:
+                                            if day_d["date"] == d:
+                                                day_d["ai_comments"].append({"type": m_type, "text": msg})
+                                                
+                                    # AIの食材判定
+                                    ai_ingredients = parsed_json.get("ingredients", [])
+                                    for item in ai_ingredients:
+                                        d = item.get("date", "")
+                                        meal_type_str = item.get("meal", "")
+                                        ai_cat = item.get("category", "")
+                                        menu_name = item.get("menu_name", "")
+                                        fish_name = item.get("fish_name", "")
                                         
-                                        # NG判定
-                                        if is_natto and (is_sunday or is_monday):
-                                            day_alerts.append({"type": meal_type, "text": f"❌ <b>[{meal_name}]</b> 日・月の納豆提供はNG"})
-                                            count_ng += 1
-                                        if is_bread and meal_type == "dinner":
-                                            day_alerts.append({"type": meal_type, "text": f"❌ <b>[{meal_name}]</b> 夕食のパン提供はNG"})
-                                            count_ng += 1
-                                        if is_bread and is_monday:
-                                            day_alerts.append({"type": meal_type, "text": f"❌ <b>[{meal_name}]</b> 月曜のパン提供はNG"})
-                                            count_ng += 1
-                                        if is_noodle and meal_type == "dinner":
-                                            day_alerts.append({"type": meal_type, "text": f"❌ <b>[{meal_name}]</b> 夕食の麺類(汁あり)はNG"})
-                                            count_ng += 1
+                                        if ai_cat in categories:
+                                            day_type = ""
+                                            if any(x in d for x in ["(月)", "(水)", "(金)"]): day_type = "月水金"
+                                            elif any(x in d for x in ["(火)", "(木)", "(土)"]): day_type = "火木土"
                                             
-                                        if is_curry: curry_count += 1
-                                        if meal_type in ["lunch", "dinner"] and (is_bread or is_noodle or is_aji_gohan or (menu and menu[0] != "御飯" and menu[0] != "全粥")):
-                                            kawari_count += 1
-                                            
-                                        # 塩分・カロリー判定
-                                        if meal_type == "breakfast":
-                                            cal_limit = max_cal_bf_bread if is_bread else max_cal_bf
-                                            if cal > 0 and (cal < min_cal_bf or cal > cal_limit):
-                                                day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"})
-                                                count_nut_meal += 1
-                                            if pro > 0 and (pro < min_pro_bf or pro > max_pro_bf):
-                                                day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"})
-                                                count_nut_meal += 1
-                                            salt_limit = max_salt_bf_bread if is_bread else max_salt_bf
-                                            if meal_salt > salt_limit:
-                                                day_alerts.append({"type": meal_type, "text": f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"})
-                                                count_nut_meal += 1
-                                        else:
-                                            if cal > 0 and (cal < min_cal_ld or cal > max_cal_ld):
-                                                day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カロリー</b> ({cal}kcal)"})
-                                                count_nut_meal += 1
-                                            if pro > 0 and (pro < min_pro_ld or pro > max_pro_ld):
-                                                day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] たんぱく</b> ({pro}g)"})
-                                                count_nut_meal += 1
-                                            if pot > max_potassium:
-                                                day_alerts.append({"type": meal_type, "text": f"⚠️ <b>[{meal_name}] カリウム</b> ({pot}mg)"})
-                                                count_nut_meal += 1
+                                            meal_time = ""
+                                            if "昼" in meal_type_str: meal_time = "昼"
+                                            elif "夕" in meal_type_str or "夜" in meal_type_str: meal_time = "夕"
                                                 
-                                            if is_bread or is_noodle or is_curry or '炒飯' in menu_str or '高菜ピラフ' in menu_str: salt_limit = max_salt_ld_noodle
-                                            elif is_aji_gohan: salt_limit = max_salt_ld_aji
-                                            else: salt_limit = max_salt_ld
+                                            if day_type and meal_time:
+                                                slot = f"{day_type}({meal_time})"
+                                                hover_text = f"{d}: {menu_name}"
+                                                detailed_cross_data[ai_cat][slot].append(hover_text)
                                                 
-                                            if meal_salt > salt_limit:
-                                                day_alerts.append({"type": meal_type, "text": f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"})
-                                                count_nut_meal += 1
-                                                
-                                        formatted_menus.append({"type": meal_type, "text": f"<b>[{meal_name}]</b> {', '.join(clean_menu)}"})
-                                        prompt += f"[{meal_name}] {', '.join(clean_menu)}\n"
-                                        
-                                day_details.append({
-                                    "date": date,
-                                    "day_index": day_index,
-                                    "menus": formatted_menus,
-                                    "alerts": day_alerts,
-                                    "ai_comments": [] 
+                                                if ai_cat in ['白身魚', '青魚', 'その他(赤魚)'] and fish_name:
+                                                    fish_details[ai_cat][fish_name] = fish_details[ai_cat].get(fish_name, 0) + 1
+                                                    
+                                                    current_day_idx = next((dd["day_index"] for dd in day_details if dd["date"] == d), 0)
+                                                    
+                                                    for hist in fish_history:
+                                                        diff = current_day_idx - hist['day_index']
+                                                        if hist['fish'] == fish_name and diff <= 3 and diff > 0:
+                                                            msg = f"🚨 【{fish_name}】 {hist['date']} と {d} で提供間隔が近すぎます（中2日以内）"
+                                                            fish_alerts.append(msg)
+                                                            export_alerts_list.append({"出力": True, "日付": d, "食事": "all", "判定元": "定量/ルール", "指摘内容": msg})
+                                                    fish_history.append({'date': d, 'fish': fish_name, 'day_index': current_day_idx})
+                                                    
+                                except Exception as e:
+                                    parse_success = False
+
+                                week_results.append({
+                                    "week_alerts": week_alerts,
+                                    "days": day_details,
+                                    "parse_success": parse_success,
+                                    "raw_text": ai_raw_text
                                 })
-                            
-                            kawari_weekly_counts.append(kawari_count)
-                            
-                            if kawari_count > kawari_target + 1 or kawari_count < kawari_target - 1:
-                                week_alerts.append(f"📌 **変わり御飯**：今週{kawari_count}回 (目標{kawari_target}回前後)")
-                                count_ng += 1
-                            if curry_count == 0:
-                                week_alerts.append(f"❌ **カレーライス**：今週の提供がありません (週1回必須)")
-                                count_ng += 1
 
-                            # AIへ送信
-                            response = model.generate_content(prompt)
-                            ai_raw_text = response.text
-                            
-                            try:
-                                clean_text = re.sub(r'```json\n?', '', ai_raw_text)
-                                clean_text = re.sub(r'```\n?', '', clean_text)
-                                parsed_json = json.loads(clean_text.strip())
-                                parse_success = True
+                            # 解析結果をSessionStateに保存（再描画しても消えないようにする）
+                            st.session_state.analysis_results = {
+                                "weeks": weeks,
+                                "week_results": week_results,
+                                "summary": (count_salt_daily, count_cal_daily, count_nut_meal, count_ng),
+                                "dash": (detailed_cross_data, fish_details, kawari_weekly_counts, fish_alerts),
+                                "export_list": export_alerts_list,
+                                "model_used": target_model
+                            }
+                            st.session_state.processed = True
+                            st.rerun() # リロードして結果を表示
+
+                        except Exception as e:
+                            st.error(f"❌ 処理中にエラーが発生しました: {e}")
+
+            # ==========================================
+            # 解析結果の表示UI（SessionStateから読み込み）
+            # ==========================================
+            if st.session_state.get("processed", False) and "analysis_results" in st.session_state:
+                res = st.session_state.analysis_results
+                weeks = res["weeks"]
+                week_results = res["week_results"]
+                c_salt, c_cal, c_nut, c_ng = res["summary"]
+                d_cross, d_fish, d_kawari, d_alerts = res["dash"]
+                
+                st.success(f"✅ 全ての解析が完了しました！（使用AIモデル: {res['model_used']}）")
+                
+                # 新しい「レポート出力」タブを追加
+                tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))] + ["🖨️ レポート出力・最終確認"]
+                result_tabs = st.tabs(tab_names)
+                
+                # --- タブ0：全体サマリー ---
+                with result_tabs[0]:
+                    st.subheader("📊 献立チェック総括")
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("1日塩分 超過", f"{c_salt} 日")
+                    col2.metric("1日カロリー 基準外", f"{c_cal} 日")
+                    col3.metric("1食あたりの数値エラー", f"{c_nut} 件")
+                    col4.metric("提供ルール・週間アラート", f"{c_ng} 件")
+                    
+                    total_sys_errors = c_salt + c_cal + c_nut + c_ng
+                    if total_sys_errors == 0:
+                        st.success("✨ 素晴らしいです！システムが検知した定量エラーはありませんでした。")
+                    else:
+                        st.warning(f"⚠️ 合計 {total_sys_errors} 件のシステムアラートが発生しています。各週のタブから詳細を確認してください。")
+                    
+                    st.divider()
+                    st.markdown("### 💡 月間バランス・ダッシュボード")
+                    
+                    colA, colB = st.columns([1.5, 1])
+                    with colA:
+                        st.markdown("##### 🥩 食材の提供頻度（4枠ヒートマップ）")
+                        st.caption("👉 マス目にカーソルを合わせると、具体的な日付とメニューが表示されます。")
+                        
+                        categories = ['白身魚', '青魚', 'その他(赤魚)', '豚肉', '鶏肉', '牛肉', 'ミンチ']
+                        time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
+                        heat_data, hover_data = [], []
+                        
+                        for cat in categories:
+                            row_counts, row_hovers = [], []
+                            for slot in time_slots:
+                                count = len(d_cross[cat][slot])
+                                row_counts.append(count)
+                                if count > 0:
+                                    hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(d_cross[cat][slot])
+                                else:
+                                    hover_text = f"<b>{cat} - {slot}</b><br>提供なし"
+                                row_hovers.append(hover_text)
+                            heat_data.append(row_counts)
+                            hover_data.append(row_hovers)
+                        
+                        df_heat = pd.DataFrame(heat_data, index=categories, columns=time_slots)
+                        
+                        fig = px.imshow(df_heat,
+                                        labels=dict(x="提供枠", y="食材カテゴリ", color="提供回数"),
+                                        x=time_slots, y=categories,
+                                        color_continuous_scale="OrRd",
+                                        aspect="auto", text_auto=True)
+                        fig.update_traces(hovertemplate="%{customdata}<extra></extra>", customdata=hover_data)
+                        fig.update_layout(xaxis_title="", yaxis_title="", coloraxis_showscale=False,
+                                          margin=dict(l=10, r=10, t=10, b=10), height=360, font=dict(size=13),
+                                          yaxis=dict(autorange='reversed'))
+                        fig.update_xaxes(tickangle=0, side="top")
+                        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                        
+                        st.markdown("##### 🐟 今月の魚種バリエーション内訳")
+                        for cat in ['白身魚', '青魚', 'その他(赤魚)']:
+                            details = ", ".join([f"{f}({c}回)" for f, c in d_fish[cat].items()])
+                            st.markdown(f"<span style='font-size:0.9em;'><b>[{cat}]</b> {details if details else 'なし'}</span>", unsafe_allow_html=True)
+
+                    with colB:
+                        st.markdown("##### 🍚 変わり御飯の提供ペース（カレンダー順）")
+                        week_names_ordered = [f"第{i+1}週" for i in range(len(weeks))]
+                        df_kawari = pd.DataFrame({'週': week_names_ordered, '変わり御飯(回)': d_kawari})
+                        
+                        fig_kawari = px.bar(df_kawari, x='変わり御飯(回)', y='週', orientation='h',
+                                           text='変わり御飯(回)', color='変わり御飯(回)', color_continuous_scale="Oranges")
+                        fig_kawari.update_traces(textposition='outside')
+                        fig_kawari.update_layout(xaxis_title="", yaxis_title="", height=250,
+                                                 margin=dict(l=10, r=10, t=10, b=10), coloraxis_showscale=False,
+                                                 yaxis=dict(autorange='reversed'))
+                        fig_kawari.update_xaxes(showticklabels=False, showgrid=False)
+                        st.plotly_chart(fig_kawari, use_container_width=True, config={'displayModeBar': False})
+                        
+                        if d_alerts:
+                            st.markdown("##### 🚨 食材の連続・近接提供アラート")
+                            unique_fish_alerts = list(dict.fromkeys(d_alerts))
+                            for alert in unique_fish_alerts: st.error(alert)
+                
+                # --- タブ1〜N：日別メニュー ---
+                for i, tab in enumerate(result_tabs[1:-1]):
+                    with tab:
+                        if week_results[i]["week_alerts"]:
+                            for wa in week_results[i]["week_alerts"]:
+                                if "❌" in wa: st.error(wa)
+                                else: st.info(wa)
                                 
-                                # AIのアラート（定性ルール判定）
-                                ai_alerts = parsed_json.get("alerts", [])
-                                for item in ai_alerts:
-                                    d = item.get("date", "")
-                                    ai_meal = item.get("meal", "")
-                                    if "朝" in ai_meal: m_type = "breakfast"
-                                    elif "昼" in ai_meal: m_type = "lunch"
-                                    elif "夕" in ai_meal or "夜" in ai_meal: m_type = "dinner"
-                                    else: m_type = "all"
-                                    
-                                    for day_d in day_details:
-                                        if day_d["date"] == d:
-                                            day_d["ai_comments"].append({"type": m_type, "text": f"<b>[{ai_meal}]</b> {item.get('comment', '')}"})
-                                            
-                                # AIの食材判定結果（ダッシュボード用）
-                                ai_ingredients = parsed_json.get("ingredients", [])
-                                for item in ai_ingredients:
-                                    d = item.get("date", "")
-                                    meal_type_str = item.get("meal", "")
-                                    ai_cat = item.get("category", "")
-                                    menu_name = item.get("menu_name", "")
-                                    fish_name = item.get("fish_name", "")
-                                    
-                                    if ai_cat in categories:
-                                        day_type = ""
-                                        if any(x in d for x in ["(月)", "(水)", "(金)"]): day_type = "月水金"
-                                        elif any(x in d for x in ["(火)", "(木)", "(土)"]): day_type = "火木土"
+                        if not week_results[i]["parse_success"]:
+                            st.warning("⚠️ AIの回答形式が一部崩れました。念のため生の指摘データも表示します。")
+                            with st.expander("AIからの生データを見る"):
+                                st.write(week_results[i]["raw_text"])
+
+                        for day_data in week_results[i]["days"]:
+                            st.markdown(f"<div class='day-container'>", unsafe_allow_html=True)
+                            st.markdown(f"#### 🗓️ {day_data['date']}")
+                            
+                            all_alerts = [a for a in day_data["alerts"] if a["type"] == "all"]
+                            all_ai = [c for c in day_data["ai_comments"] if c["type"] == "all"]
+                            if all_alerts or all_ai:
+                                st.markdown("<b style='color:#C62828;'>【1日全体・その他の指摘】</b>", unsafe_allow_html=True)
+                                for a in all_alerts: st.markdown(f"<div class='meal-box meal-all'>{a['text']}</div>", unsafe_allow_html=True)
+                                for c in all_ai: st.markdown(f"<div class='meal-box meal-all'>{c['text']}</div>", unsafe_allow_html=True)
+
+                            col_m, col_q, col_ai = st.columns([2, 1.5, 2])
+                            col_m.caption("🍽️ 提供予定メニュー")
+                            col_q.caption("📊 システム判定 (ルール・数値)")
+                            col_ai.caption("🤖 AI定性チェック (文脈・バランス)")
+
+                            meal_types = [("breakfast", "meal-bf"), ("lunch", "meal-ld"), ("dinner", "meal-dn")]
+                            for m_type, css_class in meal_types:
+                                col1, col2, col3 = st.columns([2, 1.5, 2])
+                                
+                                menus = [m for m in day_data["menus"] if m["type"] == m_type]
+                                with col1:
+                                    for m in menus: st.markdown(f"<div class='meal-box {css_class}'>{m['text']}</div>", unsafe_allow_html=True)
                                         
-                                        meal_time = ""
-                                        if "昼" in meal_type_str: meal_time = "昼"
-                                        elif "夕" in meal_type_str or "夜" in meal_type_str: meal_time = "夕"
-                                            
-                                        if day_type and meal_time:
-                                            slot = f"{day_type}({meal_time})"
-                                            hover_text = f"{d}: {menu_name}"
-                                            detailed_cross_data[ai_cat][slot].append(hover_text)
-                                            
-                                            # 魚の内訳・連続チェック
-                                            if ai_cat in ['白身魚', '青魚', 'その他(赤魚)'] and fish_name:
-                                                fish_details[ai_cat][fish_name] = fish_details[ai_cat].get(fish_name, 0) + 1
-                                                
-                                                # day_indexを取得
-                                                current_day_idx = next((dd["day_index"] for dd in day_details if dd["date"] == d), 0)
-                                                
-                                                for hist in fish_history:
-                                                    diff = current_day_idx - hist['day_index']
-                                                    if hist['fish'] == fish_name and diff <= 3 and diff > 0:
-                                                        fish_alerts.append(f"🚨 【{fish_name}】 {hist['date']} と {d} で提供間隔が近すぎます（中2日以内）")
-                                                fish_history.append({'date': d, 'fish': fish_name, 'day_index': current_day_idx})
-                                                
-                            except Exception as e:
-                                parse_success = False
-
-                            week_results.append({
-                                "week_alerts": week_alerts,
-                                "days": day_details,
-                                "parse_success": parse_success,
-                                "raw_text": ai_raw_text
-                            })
-
-                        st.success(f"✅ 全ての解析が完了しました！（使用AIモデル: {target_model}）")
-                        
-                        tab_names = ["📊 全体サマリー"] + [f"📅 第{i+1}週" for i in range(len(weeks))]
-                        result_tabs = st.tabs(tab_names)
-                        
-                        # --- 全体サマリー画面の描画 ---
-                        with result_tabs[0]:
-                            st.subheader("📊 献立チェック総括")
-                            
-                            col1, col2, col3, col4 = st.columns(4)
-                            col1.metric("1日塩分 超過", f"{count_salt_daily} 日")
-                            col2.metric("1日カロリー 基準外", f"{count_cal_daily} 日")
-                            col3.metric("1食あたりの数値エラー", f"{count_nut_meal} 件")
-                            col4.metric("提供ルール・週間アラート", f"{count_ng} 件")
-                            
-                            total_sys_errors = count_salt_daily + count_cal_daily + count_nut_meal + count_ng
-                            if total_sys_errors == 0:
-                                st.success("✨ 素晴らしいです！システムが検知した定量エラーはありませんでした。")
-                            else:
-                                st.warning(f"⚠️ 合計 {total_sys_errors} 件のシステムアラートが発生しています。各週のタブから詳細を確認してください。")
-                            
+                                alerts = [a for a in day_data["alerts"] if a["type"] == m_type]
+                                with col2:
+                                    if alerts:
+                                        for a in alerts: st.markdown(f"<div class='meal-box {css_class}'>{a['text']}</div>", unsafe_allow_html=True)
+                                    elif menus:
+                                        st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✅ 問題なし</div>", unsafe_allow_html=True)
+                                        
+                                ai_comments = [c for c in day_data["ai_comments"] if c["type"] == m_type]
+                                with col3:
+                                    if ai_comments:
+                                        for c in ai_comments: st.markdown(f"<div class='meal-box {css_class}'>{c['text']}</div>", unsafe_allow_html=True)
+                                    elif menus:
+                                        st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✨ 指摘なし</div>", unsafe_allow_html=True)
+                                        
                             st.divider()
-                            st.markdown("### 💡 月間バランス・ダッシュボード")
-                            
-                            colA, colB = st.columns([1.5, 1])
-                            
-                            with colA:
-                                # --- 修正点3: 色味を柔らかいグラデーションに変更（OrRd） ---
-                                st.markdown("##### 🥩 食材の提供頻度（4枠ヒートマップ）")
-                                st.caption("👉 マス目にカーソルを合わせると、具体的な日付とメニューが表示されます。")
-                                
-                                categories_for_heat = categories # 並び順
-                                heat_data = []
-                                hover_data = []
-                                
-                                for cat in categories_for_heat:
-                                    row_counts = []
-                                    row_hovers = []
-                                    for slot in time_slots:
-                                        count = len(detailed_cross_data[cat][slot])
-                                        row_counts.append(count)
-                                        if count > 0:
-                                            hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(detailed_cross_data[cat][slot])
-                                        else:
-                                            hover_text = f"<b>{cat} - {slot}</b><br>提供なし"
-                                        row_hovers.append(hover_text)
-                                    heat_data.append(row_counts)
-                                    hover_data.append(row_hovers)
-                                
-                                df_heat = pd.DataFrame(heat_data, index=categories_for_heat, columns=time_slots)
-                                
-                                # --- 修正点1: yaxis_autorange='reversed' で一番上を「白身魚」にする ---
-                                fig = px.imshow(df_heat,
-                                                labels=dict(x="提供枠", y="食材カテゴリ", color="提供回数"),
-                                                x=time_slots,
-                                                y=categories_for_heat,
-                                                color_continuous_scale="OrRd", # 柔らかい赤・オレンジ系に変更
-                                                aspect="auto",
-                                                text_auto=True 
-                                               )
-                                fig.update_traces(hovertemplate="%{customdata}<extra></extra>", customdata=hover_data)
-                                
-                                fig.update_layout(
-                                    xaxis_title="",
-                                    yaxis_title="",
-                                    coloraxis_showscale=False,
-                                    margin=dict(l=10, r=10, t=10, b=10),
-                                    height=360,
-                                    font=dict(size=13),
-                                    yaxis=dict(autorange='reversed') # これで上が「白身魚」になる
-                                )
-                                fig.update_xaxes(tickangle=0, side="top")
-                                
-                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
-                                
-                                st.markdown("##### 🐟 今月の魚種バリエーション内訳")
-                                for cat in ['白身魚', '青魚', 'その他(赤魚)']:
-                                    details = ", ".join([f"{f}({c}回)" for f, c in fish_details[cat].items()])
-                                    st.markdown(f"<span style='font-size:0.9em;'><b>[{cat}]</b> {details if details else 'なし'}</span>", unsafe_allow_html=True)
+                            st.markdown(f"</div>", unsafe_allow_html=True)
 
-                            with colB:
-                                # --- 修正点2: 変わり御飯のペースを「上から第1週、第2週」の縦並びにする ---
-                                st.markdown("##### 🍚 変わり御飯の提供ペース（カレンダー順）")
-                                
-                                week_names_ordered = [f"第{i+1}週" for i in range(len(weeks))]
-                                # 下から上へ描画されるPlotlyExpressの仕様に合わせ、データは反転させるが、Y軸を反転させる
-                                df_kawari = pd.DataFrame({
-                                    '週': week_names_ordered,
-                                    '変わり御飯(回)': kawari_weekly_counts
-                                })
-                                
-                                fig_kawari = px.bar(df_kawari, 
-                                                   x='変わり御飯(回)', 
-                                                   y='週', 
-                                                   orientation='h', # 横向きの棒グラフ
-                                                   text='変わり御飯(回)', # 棒の上に数字を表示
-                                                   color='変わり御飯(回)', # 回数で色を分ける
-                                                   color_continuous_scale="Oranges" # 柔らかいオレンジ系
-                                                  )
-                                
-                                fig_kawari.update_traces(textposition='outside') # 数字を棒の外側に
-
-                                fig_kawari.update_layout(
-                                    xaxis_title="",
-                                    yaxis_title="",
-                                    height=250,
-                                    margin=dict(l=10, r=10, t=10, b=10),
-                                    coloraxis_showscale=False, # カラーバーを非表示
-                                    yaxis=dict(autorange='reversed') # これで上が「第1週」になる
-                                )
-                                fig_kawari.update_xaxes(showticklabels=False, showgrid=False) # X軸をスッキリ
-
-                                st.plotly_chart(fig_kawari, use_container_width=True, config={'displayModeBar': False})
-                                
-                                if fish_alerts:
-                                    st.markdown("##### 🚨 食材の連続・近接提供アラート")
-                                    # 重複排除
-                                    unique_fish_alerts = []
-                                    for alert in fish_alerts:
-                                        if alert not in unique_fish_alerts:
-                                            unique_fish_alerts.append(alert)
-                                    for alert in unique_fish_alerts:
-                                        st.error(alert)
+                # --- 新規追加：レポート出力・最終確認タブ ---
+                with result_tabs[-1]:
+                    st.subheader("🖨️ 確認用レポートの作成・ダウンロード")
+                    st.markdown("下の表の左端にある **「出力」チェックボックス** をクリックして、許容・無視するアラートのチェックを外してください。残った項目だけを、現場への修正指示用シート（Excel）としてダウンロードできます。")
+                    
+                    df_export_base = pd.DataFrame(res["export_list"])
+                    
+                    if not df_export_base.empty:
+                        # 英語の食事キーを日本語に変換
+                        meal_dict = {"all": "1日全体", "breakfast": "朝食", "lunch": "昼食", "dinner": "夕食"}
+                        df_export_base["食事"] = df_export_base["食事"].map(meal_dict).fillna(df_export_base["食事"])
                         
-                        for i, tab in enumerate(result_tabs[1:]):
-                            with tab:
-                                if week_results[i]["week_alerts"]:
-                                    for wa in week_results[i]["week_alerts"]:
-                                        if "❌" in wa: st.error(wa)
-                                        else: st.info(wa)
-                                        
-                                if not week_results[i]["parse_success"]:
-                                    st.warning("⚠️ AIの回答形式が一部崩れました。念のため生の指摘データも表示します。")
-                                    with st.expander("AIからの生データを見る"):
-                                        st.write(week_results[i]["raw_text"])
-
-                                # 日ごとにレンダリング
-                                for day_data in week_results[i]["days"]:
-                                    st.markdown(f"<div class='day-container'>", unsafe_allow_html=True)
-                                    st.markdown(f"#### 🗓️ {day_data['date']}")
-                                    
-                                    all_alerts = [a for a in day_data["alerts"] if a["type"] == "all"]
-                                    all_ai = [c for c in day_data["ai_comments"] if c["type"] == "all"]
-                                    if all_alerts or all_ai:
-                                        st.markdown("<b style='color:#C62828;'>【1日全体・その他の指摘】</b>", unsafe_allow_html=True)
-                                        for a in all_alerts:
-                                            st.markdown(f"<div class='meal-box meal-all'>{a['text']}</div>", unsafe_allow_html=True)
-                                        for c in all_ai:
-                                            st.markdown(f"<div class='meal-box meal-all'>{c['text']}</div>", unsafe_allow_html=True)
-
-                                    col_m, col_q, col_ai = st.columns([2, 1.5, 2])
-                                    col_m.caption("🍽️ 提供予定メニュー")
-                                    col_q.caption("📊 システム判定 (ルール・数値)")
-                                    col_ai.caption("🤖 AI定性チェック (文脈・バランス)")
-
-                                    meal_types = [("breakfast", "meal-bf"), ("lunch", "meal-ld"), ("dinner", "meal-dn")]
-                                    for m_type, css_class in meal_types:
-                                        col1, col2, col3 = st.columns([2, 1.5, 2])
-                                        
-                                        menus = [m for m in day_data["menus"] if m["type"] == m_type]
-                                        with col1:
-                                            for m in menus:
-                                                st.markdown(f"<div class='meal-box {css_class}'>{m['text']}</div>", unsafe_allow_html=True)
-                                                
-                                        alerts = [a for a in day_data["alerts"] if a["type"] == m_type]
-                                        with col2:
-                                            if alerts:
-                                                for a in alerts:
-                                                    st.markdown(f"<div class='meal-box {css_class}'>{a['text']}</div>", unsafe_allow_html=True)
-                                            elif menus:
-                                                st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✅ 問題なし</div>", unsafe_allow_html=True)
-                                                
-                                        ai_comments = [c for c in day_data["ai_comments"] if c["type"] == m_type]
-                                        with col3:
-                                            if ai_comments:
-                                                for c in ai_comments:
-                                                    st.markdown(f"<div class='meal-box {css_class}'>{c['text']}</div>", unsafe_allow_html=True)
-                                            elif menus:
-                                                st.markdown(f"<div class='meal-box {css_class}' style='opacity: 0.6;'>✨ 指摘なし</div>", unsafe_allow_html=True)
-                                                
-                                    st.divider()
-                                    st.markdown(f"</div>", unsafe_allow_html=True)
-
-                    except Exception as e:
-                        st.error(f"❌ 処理中にエラーが発生しました: {e}")
+                        # インタラクティブなデータテーブル（チェックのON/OFFが可能）
+                        edited_df = st.data_editor(
+                            df_export_base,
+                            column_config={
+                                "出力": st.column_config.CheckboxColumn("出力", help="チェックを外すとダウンロードから除外されます", default=True),
+                                "判定元": st.column_config.TextColumn(width="small"),
+                            },
+                            disabled=["日付", "食事", "判定元", "指摘内容"], # 出力フラグ以外は編集不可
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400
+                        )
+                        
+                        # ダウンロード用データの成形
+                        final_df = edited_df[edited_df["出力"] == True].copy()
+                        final_df.drop(columns=["出力"], inplace=True)
+                        final_df.insert(0, "確認", "") # 紙に印刷した時用のレ点チェック欄
+                        final_df["対応メモ"] = "" # ペンで書き込むメモ欄
+                        
+                        # Excelファイルの生成（メモリ上）
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            final_df.to_excel(writer, index=False, sheet_name="献立修正シート")
+                            # 列幅の自動調整（見やすさ配慮）
+                            worksheet = writer.sheets['献立修正シート']
+                            worksheet.column_dimensions['A'].width = 6   # 確認
+                            worksheet.column_dimensions['B'].width = 15  # 日付
+                            worksheet.column_dimensions['C'].width = 10  # 食事
+                            worksheet.column_dimensions['D'].width = 15  # 判定元
+                            worksheet.column_dimensions['E'].width = 60  # 指摘内容
+                            worksheet.column_dimensions['F'].width = 30  # 対応メモ
+                            
+                        excel_data = output.getvalue()
+                        
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        st.download_button(
+                            label="📥 献立修正タスクシート (Excel) をダウンロード",
+                            data=excel_data,
+                            file_name="献立修正シート.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    else:
+                        st.success("エラーや指摘事項は1件もありませんでした！")
