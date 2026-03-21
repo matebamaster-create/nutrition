@@ -392,7 +392,7 @@ with tab_main:
                             ai_raw_text = response.text
                             
                             try:
-                                clean_text = re.sub(r'```json\n?', '', ai_ raw_text)
+                                clean_text = re.sub(r'```json\n?', '', ai_raw_text)
                                 clean_text = re.sub(r'```\n?', '', clean_text)
                                 parsed_json = json.loads(clean_text.strip())
                                 parse_success = True
