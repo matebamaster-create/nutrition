@@ -4,6 +4,7 @@ import re
 import os
 import json
 import google.generativeai as genai
+import plotly.express as px # 新しく追加したライブラリ（要requirements.txtへの追記）
 
 # ==========================================
 # ページ全体のデザイン設定
@@ -268,7 +269,10 @@ with tab_main:
                         
                         # ダッシュボード用
                         categories = ['白身魚', '青魚', '赤魚', '牛肉', '豚肉', '鶏肉', 'ミンチ']
-                        cross_table = {cat: {'月水金(昼)':0, '月水金(夕)':0, '火木土(昼)':0, '火木土(夕)':0, '合計':0} for cat in categories}
+                        time_slots = ['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)']
+                        # Plotlyホバー用に詳細データを保存する構造に変更
+                        detailed_cross_data = {cat: {slot: [] for slot in time_slots} for cat in categories}
+                        
                         fish_details = {'白身魚': {}, '青魚': {}, '赤魚': {}}
                         fish_history = []
                         fish_alerts = []
@@ -319,7 +323,9 @@ with tab_main:
                                     meal_salt = nut.get("salt_equivalent_g", 0)
                                     
                                     if menu:
-                                        menu_str = "".join(menu)
+                                        # 表示用メニュー名をきれいに
+                                        clean_menu = [m for m in menu if ":" not in m and "kcal" not in m and not re.match(r'^\d', m)]
+                                        menu_str = "".join(clean_menu)
                                         
                                         # --- ダッシュボード用 食材・枠判定 ---
                                         if meal_type in ["lunch", "dinner"]:
@@ -330,38 +336,60 @@ with tab_main:
                                             slot = f"{day_type}({'昼' if meal_type=='lunch' else '夕'})" if day_type else ""
                                             cat_matched = None
                                             fish_matched = None
+                                            item_matched = "" # ホバー用に具体的な料理名を保存
                                             
-                                            # 魚の判定
-                                            if any(k in menu_str for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ']):
-                                                cat_matched = '白身魚'
-                                                fish_matched = next((k for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ'] if k in menu_str), '白身魚')
-                                            elif any(k in menu_str for k in ['サバ', '鯖', 'サンマ', '秋刀魚', 'アジ', '鯵', 'イワシ', 'ブリ', '鰤', '青魚']):
-                                                cat_matched = '青魚'
-                                                if 'サバ' in menu_str or '鯖' in menu_str: fish_matched = 'サバ'
-                                                elif 'サンマ' in menu_str or '秋刀魚' in menu_str: fish_matched = 'サンマ'
-                                                elif 'アジ' in menu_str or '鯵' in menu_str: fish_matched = 'アジ'
-                                                elif 'ブリ' in menu_str or '鰤' in menu_str: fish_matched = 'ブリ'
-                                                elif 'イワシ' in menu_str: fish_matched = 'イワシ'
-                                                else: fish_matched = '青魚'
-                                            elif any(k in menu_str for k in ['サケ', '鮭', 'マス', '赤魚']):
-                                                cat_matched = '赤魚'
-                                                if 'サケ' in menu_str or '鮭' in menu_str: fish_matched = 'サケ'
-                                                elif 'マス' in menu_str: fish_matched = 'マス'
-                                                else: fish_matched = '赤魚'
-                                            # 肉の判定
-                                            elif any(k in menu_str for k in ['ミンチ', 'ひき肉', 'そぼろ']):
-                                                cat_matched = 'ミンチ'
-                                            elif '牛' in menu_str:
-                                                cat_matched = '牛肉'
-                                            elif '豚' in menu_str:
-                                                cat_matched = '豚肉'
-                                            elif any(k in menu_str for k in ['鶏', 'チキン']):
-                                                cat_matched = '鶏肉'
+                                            # 魚の判定（料理名も取得するように強化）
+                                            for item in clean_menu:
+                                                if any(k in item for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ']):
+                                                    cat_matched = '白身魚'
+                                                    fish_matched = next((k for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ'] if k in item), '白身魚')
+                                                    item_matched = item
+                                                    break
+                                                elif any(k in item for k in ['サバ', '鯖', 'サンマ', '秋刀魚', 'アジ', '鯵', 'イワシ', 'ブリ', '鰤', '青魚']):
+                                                    cat_matched = '青魚'
+                                                    if 'サバ' in item or '鯖' in item: fish_matched = 'サバ'
+                                                    elif 'サンマ' in item or '秋刀魚' in item: fish_matched = 'サンマ'
+                                                    elif 'アジ' in item or '鯵' in item: fish_matched = 'アジ'
+                                                    elif 'ブリ' in item or '鰤' in item: fish_matched = 'ブリ'
+                                                    elif 'イワシ' in item: fish_matched = 'イワシ'
+                                                    else: fish_matched = '青魚'
+                                                    item_matched = item
+                                                    break
+                                                elif any(k in item for k in ['サケ', '鮭', 'マス', 'マス', '赤魚']):
+                                                    cat_matched = '赤魚'
+                                                    if 'サケ' in item or '鮭' in item: fish_matched = 'サケ'
+                                                    elif 'マス' in item: fish_matched = 'マス'
+                                                    else: fish_matched = '赤魚'
+                                                    item_matched = item
+                                                    break
+                                                    
+                                            # 肉の判定（魚がいなかった場合、牛肉誤カウント対策入り）
+                                            if not cat_matched:
+                                                for item in clean_menu:
+                                                    if any(k in item for k in ['ミンチ', 'ひき肉', 'そぼろ']):
+                                                        cat_matched = 'ミンチ'
+                                                        item_matched = item
+                                                        break
+                                                    # --- 修正点：牛乳、牛蒡を牛肉としてカウントしない ---
+                                                    elif '牛' in item and '牛乳' not in item and '牛蒡' not in item and 'ごぼう' not in item:
+                                                        cat_matched = '牛肉'
+                                                        item_matched = item
+                                                        break
+                                                    elif '豚' in item:
+                                                        cat_matched = '豚肉'
+                                                        item_matched = item
+                                                        break
+                                                    elif any(k in item for k in ['鶏', 'チキン']):
+                                                        cat_matched = '鶏肉'
+                                                        item_matched = item
+                                                        break
                                                 
-                                            if cat_matched:
-                                                if slot: cross_table[cat_matched][slot] += 1
-                                                cross_table[cat_matched]['合計'] += 1
+                                            if cat_matched and slot:
+                                                # ホバー表示用のテキストを作成
+                                                hover_text = f"{date}: {item_matched}"
+                                                detailed_cross_data[cat_matched][slot].append(hover_text)
                                                 
+                                                # 魚の内訳・連続チェック
                                                 if cat_matched in ['白身魚', '青魚', '赤魚'] and fish_matched:
                                                     fish_details[cat_matched][fish_matched] = fish_details[cat_matched].get(fish_matched, 0) + 1
                                                     # 近接提供チェック（中2日以内）
@@ -371,12 +399,12 @@ with tab_main:
                                                             fish_alerts.append(f"🚨 【{fish_matched}】 {hist['date']} と {date} で提供間隔が近すぎます（中2日以内）")
                                                     fish_history.append({'date': date, 'fish': fish_matched, 'day_index': day_index})
                                         
-                                        # 基本カテゴリ判定
-                                        is_bread = any(k in menu_str for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
-                                        is_noodle = any(k in menu_str for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
-                                        is_curry = 'カレー' in menu_str
-                                        is_aji_gohan = any(k in menu_str for k in ['ピラフ', '炒飯', 'チャーハン', 'かしわ飯', '炊き込み', '丼', '寿司', 'オムライス', 'ビーフシチュー'])
-                                        is_natto = '納豆' in menu_str
+                                        # 基本カテゴリ判定（日別エラー用）
+                                        is_bread = any(k in "".join(clean_menu) for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
+                                        is_noodle = any(k in "".join(clean_menu) for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
+                                        is_aji_gohan = any(k in "".join(clean_menu) for k in ['ピラフ', '炒飯', 'チャーハン', 'かしわ飯', '炊き込み', '丼', '寿司', 'オムライス', 'ビーフシチュー'])
+                                        is_curry = 'カレー' in "".join(clean_menu)
+                                        is_natto = '納豆' in "".join(clean_menu)
                                         
                                         # NG判定
                                         if is_natto and (is_sunday or is_monday):
@@ -428,7 +456,6 @@ with tab_main:
                                                 day_alerts.append({"type": meal_type, "text": f"🚨 <b>[{meal_name}] 塩分</b> ({meal_salt}g)"})
                                                 count_nut_meal += 1
                                                 
-                                        clean_menu = [m for m in menu if ":" not in m and "kcal" not in m]
                                         formatted_menus.append({"type": meal_type, "text": f"<b>[{meal_name}]</b> {', '.join(clean_menu)}"})
                                         prompt += f"[{meal_name}] {', '.join(clean_menu)}\n"
                                         
@@ -505,14 +532,57 @@ with tab_main:
                             st.divider()
                             st.markdown("### 💡 月間バランス・ダッシュボード")
                             
-                            colA, colB = st.columns([1.2, 1])
+                            colA, colB = st.columns([1.5, 1]) # クロス集計を少し広く
                             
                             with colA:
-                                st.markdown("##### 🥩 食材の提供頻度（4枠クロス集計）")
-                                df_cross = pd.DataFrame(cross_table).T
-                                df_cross = df_cross[['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)', '合計']]
-                                # Matplotlibが導入されたため、赤いヒートマップ表示を復活させます
-                                st.dataframe(df_cross.style.background_gradient(cmap='Reds', axis=None, low=0, high=1), use_container_width=True)
+                                st.markdown("##### 🥩 食材の提供頻度（4枠ヒートマップ）")
+                                st.caption("👉 マス目にカーソルを合わせると、具体的な日付とメニューが表示されます。")
+                                
+                                # Plotly用のデータフレームを作成
+                                categories_reversed = categories[::-1] # 下から上に表示されるため反転
+                                heat_data = []
+                                hover_data = [] # ホバーテキスト用の行列
+                                
+                                for cat in categories_reversed:
+                                    row_counts = []
+                                    row_hovers = []
+                                    for slot in time_slots:
+                                        count = len(detailed_cross_data[cat][slot])
+                                        row_counts.append(count)
+                                        # ホバー用のテキスト（日付とメニューを改行でつなぐ）
+                                        hover_text = f"<b>{cat} - {slot}</b> (合計: {count}回)<br>" + "<br>".join(detailed_cross_data[cat][slot])
+                                        row_hovers.append(hover_text)
+                                    heat_data.append(row_counts)
+                                    hover_data.append(row_hovers)
+                                
+                                df_heat = pd.DataFrame(heat_data, index=categories_reversed, columns=time_slots)
+                                
+                                # Plotly Expressでヒートマップを作成
+                                fig = px.imshow(df_heat,
+                                                labels=dict(x="提供枠", y="食材カテゴリ", color="提供回数"),
+                                                x=time_slots,
+                                                y=categories_reversed,
+                                                color_continuous_scale="Reds", # 赤系のグラデーション
+                                                aspect="auto",
+                                                text_auto=True # 数字を表示
+                                               )
+                                
+                                # ホバーの挙動をカスタマイズ
+                                fig.update_traces(hovertemplate="%{customdata}<extra></extra>", customdata=hover_data)
+                                
+                                # レイアウトの調整（見やすさ重視）
+                                fig.update_layout(
+                                    xaxis_title="",
+                                    yaxis_title="",
+                                    coloraxis_showscale=False, # カラーバーを非表示にしてスッキリ
+                                    margin=dict(l=10, r=10, t=10, b=10), # 余白を詰める
+                                    height=350, # 高さを固定
+                                    font=dict(size=12)
+                                )
+                                # X軸のラベル（曜日・昼夜）を少し傾けて見やすく
+                                fig.update_xaxes(tickangle=0, side="top") # ラベルを上に配置
+                                
+                                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False}) # グラフ操作バーを非表示
                                 
                                 st.markdown("##### 🐟 今月の魚種バリエーション内訳")
                                 for cat in ['白身魚', '青魚', '赤魚']:
@@ -527,7 +597,7 @@ with tab_main:
                                 
                                 if fish_alerts:
                                     st.markdown("##### 🚨 食材の連続・近接提供アラート")
-                                    # 重重複を排除して表示
+                                    # 重複を排除して表示
                                     unique_fish_alerts = []
                                     for alert in fish_alerts:
                                         if alert not in unique_fish_alerts:
