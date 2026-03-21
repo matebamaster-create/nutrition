@@ -60,11 +60,10 @@ DEFAULT_RULES = """【朝食について】
 ・片手で食べにくい汁あり麺や温泉たまごはNG。
 ・おかずにならないパン料理やプリン等のデザート、果物入りサラダはNG。
 【全体（食材・調理の重複）】
-・いも類が同じ時間に2つ、または毎食提供されていないか。
-・にんじんや青物などが同じ時間に全品に入っていないか（主菜ほうれん草、副菜小松菜はNG）。
-・夕食の副菜と、翌日朝食の副菜が（食材含め）一緒ではないか。
-・夕食の主菜と、翌日昼食の主菜の食材が一緒ではないか。
-・箸だけで食べにくい食材（豆、豆腐、ひじき等）が含まれる場合はスプーンをつける配慮がメニュー名から読み取れるか。"""
+・いも類が同じ時間に2つ、または毎食提供されていないか.
+・にんじんや青物などが同じ時間に全品提供していないか
+・（ 主菜にほうれん草、副菜に小松菜はNG ）
+・箸だけでは食べにくい食材（ 豆や豆腐、ひじきなど ）には小スプーンをつける配慮がメニュー名から読み取れるか。"""
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview" 
 
@@ -106,7 +105,18 @@ def save_ai_model(model_name):
 # サイドバー（設定画面）
 # ==========================================
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80)
+    # --- 修正：左上のロゴ画像を差し替え ---
+    # 1. 添付画像を "logo.png" として、app.pyと同じ場所に保存してください。
+    # 2. GitHubにlogo.pngと修正したapp.pyをプッシュしてください。
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        # キャラクター画像に合わせて、サイドバーの幅に合わせて表示するように変更
+        st.image(logo_path, use_column_width=True)
+    else:
+        # 画像がない場合のフォールバック（以前のアイコンを表示）
+        # st.warning("ロゴ画像が見つかりません。")
+        st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80)
+    
     st.title("⚙️ システム設定")
     
     st.markdown("### 🔑 AI連携設定")
@@ -382,7 +392,7 @@ with tab_main:
                             ai_raw_text = response.text
                             
                             try:
-                                clean_text = re.sub(r'```json\n?', '', ai_raw_text)
+                                clean_text = re.sub(r'```json\n?', '', ai_ raw_text)
                                 clean_text = re.sub(r'```\n?', '', clean_text)
                                 parsed_json = json.loads(clean_text.strip())
                                 parse_success = True
