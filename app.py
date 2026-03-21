@@ -511,7 +511,7 @@ with tab_main:
                                 st.markdown("##### 🥩 食材の提供頻度（4枠クロス集計）")
                                 df_cross = pd.DataFrame(cross_table).T
                                 df_cross = df_cross[['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)', '合計']]
-                                # 数字の偏りを色で可視化するヒートマップ表示
+                                # Matplotlibが導入されたため、赤いヒートマップ表示を復活させます
                                 st.dataframe(df_cross.style.background_gradient(cmap='Reds', axis=None, low=0, high=1), use_container_width=True)
                                 
                                 st.markdown("##### 🐟 今月の魚種バリエーション内訳")
@@ -527,7 +527,7 @@ with tab_main:
                                 
                                 if fish_alerts:
                                     st.markdown("##### 🚨 食材の連続・近接提供アラート")
-                                    # 重複を排除して表示
+                                    # 重重複を排除して表示
                                     unique_fish_alerts = []
                                     for alert in fish_alerts:
                                         if alert not in unique_fish_alerts:
