@@ -32,15 +32,11 @@ st.markdown("""
         border-left: 5px solid;
         font-size: 0.9em;
         line-height: 1.4;
-        height: 100%; /* 高さを揃えるための工夫 */
+        height: 100%;
     }
-    /* 朝食：オレンジ系 */
     .meal-bf { background-color: #FFF3E0; border-left-color: #FF9800; color: #E65100; }
-    /* 昼食：グリーン系 */
     .meal-ld { background-color: #E8F5E9; border-left-color: #4CAF50; color: #2E7D32; }
-    /* 夕食：ブルー系 */
     .meal-dn { background-color: #E3F2FD; border-left-color: #2196F3; color: #1565C0; }
-    /* 全体・1日ルール：レッド系 */
     .meal-all { background-color: #FFEBEE; border-left-color: #F44336; color: #C62828; }
     </style>
     """, unsafe_allow_html=True)
@@ -63,7 +59,8 @@ DEFAULT_RULES = """【朝食について】
 ・いも類が同じ時間に2つ、または毎食提供されていないか.
 ・にんじんや青物などが同じ時間に全品提供していないか
 ・（ 主菜にほうれん草、副菜に小松菜はNG ）
-・箸だけでは食べにくい食材（ 豆や豆腐、ひじきなど ）には小スプーンをつける配慮がメニュー名から読み取れるか。"""
+・箸だけでは食べにくい食材（ 豆や豆腐、ひじきなど ）には小スプーンをつける配慮がメニュー名から読み取れるか。
+・同じ名前の魚（サバ、サケ、カレイ等）が、同じ週の中や連続した日で提供されていないか厳しくチェックすること。"""
 
 DEFAULT_MODEL = "gemini-3.1-pro-preview" 
 
@@ -105,16 +102,10 @@ def save_ai_model(model_name):
 # サイドバー（設定画面）
 # ==========================================
 with st.sidebar:
-    # --- 修正：左上のロゴ画像を差し替え ---
-    # 1. 添付画像を "logo.png" として、app.pyと同じ場所に保存してください。
-    # 2. GitHubにlogo.pngと修正したapp.pyをプッシュしてください。
     logo_path = "logo.png"
     if os.path.exists(logo_path):
-        # キャラクター画像に合わせて、サイドバーの幅に合わせて表示するように変更
         st.image(logo_path, use_column_width=True)
     else:
-        # 画像がない場合のフォールバック（以前のアイコンを表示）
-        # st.warning("ロゴ画像が見つかりません。")
         st.image("https://cdn-icons-png.flaticon.com/512/3448/3448066.png", width=80)
     
     st.title("⚙️ システム設定")
@@ -163,7 +154,7 @@ with st.sidebar:
 # メイン画面
 # ==========================================
 st.title("🍽️ 透析食A 献立自動チェックシステム")
-st.markdown("「透析食Aの決まりごと」に基づき、カロリー・塩分の主食別変動チェック、NG曜日のキーワード判定、AI定性チェックを全自動で行います。")
+st.markdown("「透析食Aの決まりごと」に基づき、カロリー・塩分の変動チェック、AI定性チェックに加え、食材の偏り分析を全自動で行います。")
 
 tab_main, tab_rules = st.tabs(["🔍 献立チェック実行", "📝 マスター管理 (ルール・AIモデル)"])
 
@@ -195,7 +186,7 @@ with tab_main:
             if st.button("✨ AI自動チェックを開始する", type="primary", use_container_width=True):
                 genai.configure(api_key=api_key)
                 
-                with st.spinner('高度なルール解析とAIレビューを実行中です...（約1分かかります）'):
+                with st.spinner('高度なルール解析、食材集計、AIレビューを実行中です...（約1分かかります）'):
                     try:
                         target_model = load_ai_model()
                         model = genai.GenerativeModel(target_model)
@@ -258,15 +249,30 @@ with tab_main:
                                 weeks.append(current_week)
                                 current_week = []
                         if current_week: weeks.append(current_week)
+                        
+                        # 日数ベースの通し番号を付与（魚の近接チェック用）
+                        day_idx_counter = 0
+                        for week in weeks:
+                            for day in week:
+                                day['day_index'] = day_idx_counter
+                                day_idx_counter += 1
 
                         week_results = []
                         active_rules = load_ai_rules()
                         
-                        # --- 全体サマリー用の集計カウンター ---
+                        # --- 全体サマリー用の集計カウンター・配列 ---
                         count_salt_daily = 0
                         count_cal_daily = 0
                         count_nut_meal = 0
                         count_ng = 0
+                        
+                        # ダッシュボード用
+                        categories = ['白身魚', '青魚', '赤魚', '牛肉', '豚肉', '鶏肉', 'ミンチ']
+                        cross_table = {cat: {'月水金(昼)':0, '月水金(夕)':0, '火木土(昼)':0, '火木土(夕)':0, '合計':0} for cat in categories}
+                        fish_details = {'白身魚': {}, '青魚': {}, '赤魚': {}}
+                        fish_history = []
+                        fish_alerts = []
+                        kawari_weekly_counts = []
 
                         for week_idx, week in enumerate(weeks):
                             week_alerts = []
@@ -281,6 +287,7 @@ with tab_main:
                             
                             for day in week:
                                 date = day.get('date')
+                                day_index = day.get('day_index', 0)
                                 total_nut = day.get("daily_total_nutrients", {})
                                 day_alerts = []
                                 formatted_menus = []
@@ -288,16 +295,16 @@ with tab_main:
                                 is_monday = "(月)" in date
                                 is_sunday = "(日)" in date
                                 
-                                # 1日ルールチェック（全体）
+                                # 1日ルールチェック
                                 salt = total_nut.get("salt_equivalent_g", 0)
                                 if salt >= max_salt_daily:
                                     day_alerts.append({"type": "all", "text": f"🚨 <b>1日塩分</b> 超過 ({salt}g / {max_salt_daily}g未満)"})
-                                    count_salt_daily += 1 # 集計加算
+                                    count_salt_daily += 1
                                     
                                 cal_total = total_nut.get("energy_kcal", 0)
                                 if cal_total > 0 and (cal_total < min_cal_daily or cal_total > max_cal_daily):
                                     day_alerts.append({"type": "all", "text": f"⚠️ <b>1日カロリー</b> 基準外 ({cal_total}kcal / {min_cal_daily}-{max_cal_daily})"})
-                                    count_cal_daily += 1 # 集計加算
+                                    count_cal_daily += 1
 
                                 prompt += f"■ {date}\n"
                                 
@@ -313,6 +320,58 @@ with tab_main:
                                     
                                     if menu:
                                         menu_str = "".join(menu)
+                                        
+                                        # --- ダッシュボード用 食材・枠判定 ---
+                                        if meal_type in ["lunch", "dinner"]:
+                                            day_type = ""
+                                            if any(d in date for d in ["(月)", "(水)", "(金)"]): day_type = "月水金"
+                                            elif any(d in date for d in ["(火)", "(木)", "(土)"]): day_type = "火木土"
+                                                
+                                            slot = f"{day_type}({'昼' if meal_type=='lunch' else '夕'})" if day_type else ""
+                                            cat_matched = None
+                                            fish_matched = None
+                                            
+                                            # 魚の判定
+                                            if any(k in menu_str for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ']):
+                                                cat_matched = '白身魚'
+                                                fish_matched = next((k for k in ['タラ', 'カレイ', 'ホキ', 'タイ', '白身魚', 'メルルーサ'] if k in menu_str), '白身魚')
+                                            elif any(k in menu_str for k in ['サバ', '鯖', 'サンマ', '秋刀魚', 'アジ', '鯵', 'イワシ', 'ブリ', '鰤', '青魚']):
+                                                cat_matched = '青魚'
+                                                if 'サバ' in menu_str or '鯖' in menu_str: fish_matched = 'サバ'
+                                                elif 'サンマ' in menu_str or '秋刀魚' in menu_str: fish_matched = 'サンマ'
+                                                elif 'アジ' in menu_str or '鯵' in menu_str: fish_matched = 'アジ'
+                                                elif 'ブリ' in menu_str or '鰤' in menu_str: fish_matched = 'ブリ'
+                                                elif 'イワシ' in menu_str: fish_matched = 'イワシ'
+                                                else: fish_matched = '青魚'
+                                            elif any(k in menu_str for k in ['サケ', '鮭', 'マス', '赤魚']):
+                                                cat_matched = '赤魚'
+                                                if 'サケ' in menu_str or '鮭' in menu_str: fish_matched = 'サケ'
+                                                elif 'マス' in menu_str: fish_matched = 'マス'
+                                                else: fish_matched = '赤魚'
+                                            # 肉の判定
+                                            elif any(k in menu_str for k in ['ミンチ', 'ひき肉', 'そぼろ']):
+                                                cat_matched = 'ミンチ'
+                                            elif '牛' in menu_str:
+                                                cat_matched = '牛肉'
+                                            elif '豚' in menu_str:
+                                                cat_matched = '豚肉'
+                                            elif any(k in menu_str for k in ['鶏', 'チキン']):
+                                                cat_matched = '鶏肉'
+                                                
+                                            if cat_matched:
+                                                if slot: cross_table[cat_matched][slot] += 1
+                                                cross_table[cat_matched]['合計'] += 1
+                                                
+                                                if cat_matched in ['白身魚', '青魚', '赤魚'] and fish_matched:
+                                                    fish_details[cat_matched][fish_matched] = fish_details[cat_matched].get(fish_matched, 0) + 1
+                                                    # 近接提供チェック（中2日以内）
+                                                    for hist in fish_history:
+                                                        diff = day_index - hist['day_index']
+                                                        if hist['fish'] == fish_matched and diff <= 3 and diff > 0:
+                                                            fish_alerts.append(f"🚨 【{fish_matched}】 {hist['date']} と {date} で提供間隔が近すぎます（中2日以内）")
+                                                    fish_history.append({'date': date, 'fish': fish_matched, 'day_index': day_index})
+                                        
+                                        # 基本カテゴリ判定
                                         is_bread = any(k in menu_str for k in ['パン', 'サンドイッチ', 'ホットドッグ', 'バーガー'])
                                         is_noodle = any(k in menu_str for k in ['うどん', 'そば', 'ラーメン', 'パスタ', 'スパゲティ', 'そうめん', 'ちゃんぽん', '麺'])
                                         is_curry = 'カレー' in menu_str
@@ -379,7 +438,10 @@ with tab_main:
                                     "alerts": day_alerts,
                                     "ai_comments": [] 
                                 })
-                                
+                            
+                            # 週ごとの変わり御飯をグラフ用に保存
+                            kawari_weekly_counts.append(kawari_count)
+                            
                             if kawari_count > kawari_target + 1 or kawari_count < kawari_target - 1:
                                 week_alerts.append(f"📌 **変わり御飯**：今週{kawari_count}回 (目標{kawari_target}回前後)")
                                 count_ng += 1
@@ -439,8 +501,39 @@ with tab_main:
                                 st.success("✨ 素晴らしいです！システムが検知した定量エラーはありませんでした。")
                             else:
                                 st.warning(f"⚠️ 合計 {total_sys_errors} 件のシステムアラートが発生しています。各週のタブから詳細を確認してください。")
+                            
+                            st.divider()
+                            st.markdown("### 💡 月間バランス・ダッシュボード")
+                            
+                            colA, colB = st.columns([1.2, 1])
+                            
+                            with colA:
+                                st.markdown("##### 🥩 食材の提供頻度（4枠クロス集計）")
+                                df_cross = pd.DataFrame(cross_table).T
+                                df_cross = df_cross[['月水金(昼)', '月水金(夕)', '火木土(昼)', '火木土(夕)', '合計']]
+                                # 数字の偏りを色で可視化するヒートマップ表示
+                                st.dataframe(df_cross.style.background_gradient(cmap='Reds', axis=None, low=0, high=1), use_container_width=True)
                                 
-                            st.info("💡 各週のタブをクリックして、日別の詳細なエラーとメニューを一覧で確認できます。")
+                                st.markdown("##### 🐟 今月の魚種バリエーション内訳")
+                                for cat in ['白身魚', '青魚', '赤魚']:
+                                    details = ", ".join([f"{f}({c}回)" for f, c in fish_details[cat].items()])
+                                    st.markdown(f"<span style='font-size:0.9em;'><b>[{cat}]</b> {details if details else 'なし'}</span>", unsafe_allow_html=True)
+
+                            with colB:
+                                st.markdown("##### 🍚 変わり御飯の提供ペース（週別トレンド）")
+                                week_names = [f"第{i+1}週" for i in range(len(weeks))]
+                                df_kawari = pd.DataFrame({'変わり御飯(回)': kawari_weekly_counts}, index=week_names)
+                                st.bar_chart(df_kawari, color="#FF9800", height=200)
+                                
+                                if fish_alerts:
+                                    st.markdown("##### 🚨 食材の連続・近接提供アラート")
+                                    # 重複を排除して表示
+                                    unique_fish_alerts = []
+                                    for alert in fish_alerts:
+                                        if alert not in unique_fish_alerts:
+                                            unique_fish_alerts.append(alert)
+                                    for alert in unique_fish_alerts:
+                                        st.error(alert)
                         
                         for i, tab in enumerate(result_tabs[1:]):
                             with tab:
